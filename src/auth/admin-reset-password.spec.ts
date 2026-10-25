@@ -137,6 +137,7 @@ describe('AuthService.adminResetPassword', () => {
     expect(refreshTokens.revokeAllForAccount).toHaveBeenCalledWith('u1');
     expect(email.sendAdminPasswordResetEmail).toHaveBeenCalledWith({
       to: 'u1@example.test',
+      companyId: 'c1',
     });
     // The value is never in the audit row.
     expect(JSON.stringify(auditLog.recordAuthEvent.mock.calls)).not.toContain(

@@ -532,6 +532,7 @@ export class BillPackageService {
         select: {
           id: true,
           clientId: true,
+          branchId: true,
           cgstApplicable: true,
           quotedPercentage: true,
           clientRetentionFraction: true,
@@ -658,6 +659,7 @@ export class BillPackageService {
         input.direction,
         project.clientId,
         workOrder?.partnerId ?? null,
+        project.branchId,
       );
       const taxDecision = decideTaxBasis({
         issuerGstin: parties.issuerGstin,
@@ -1504,7 +1506,12 @@ export class BillPackageService {
         where: { id: packageId },
         include: {
           project: {
-            select: { name: true, clientId: true, cgstApplicable: true },
+            select: {
+              name: true,
+              clientId: true,
+              cgstApplicable: true,
+              branchId: true,
+            },
           },
           raBill: { select: { workOrderId: true, grossAmount: true } },
           clientBill: { select: { grossAmount: true } },
@@ -1678,7 +1685,7 @@ export class BillPackageService {
         select: {
           companyId: true,
           direction: true,
-          project: { select: { name: true, clientId: true } },
+          project: { select: { name: true, clientId: true, branchId: true } },
           raBill: { select: { workOrderId: true } },
         },
       });
@@ -1703,7 +1710,7 @@ export class BillPackageService {
         select: {
           companyId: true,
           direction: true,
-          project: { select: { name: true, clientId: true } },
+          project: { select: { name: true, clientId: true, branchId: true } },
           raBill: { select: { workOrderId: true } },
         },
       });
@@ -1729,11 +1736,15 @@ export class BillPackageService {
     companyId: string,
     pkg: {
       direction: BillDirection;
-      project: { name: string; clientId: string };
+      project: { name: string; clientId: string; branchId?: string | null };
       raBill: { workOrderId: string | null } | null;
     },
   ): Promise<{ columns: Record<string, string | null>; missing: string[] }> {
-    const company = await this.companies.getBillingIdentity(companyId);
+    // The project's branch (041): the GST registration this bill is raised under. The slice is
+    // narrowed to the five header fields so nothing new reaches the frozen columns.
+    const { name, gstin, pan, state, address } =
+      await this.companies.getBillingIdentity(companyId, pkg.project.branchId);
+    const company = { name, gstin, pan, state, address };
 
     let issuer: PartyIdentity;
     let receiver: PartyIdentity;
@@ -2866,8 +2877,13 @@ export class BillPackageService {
     direction: BillDirection,
     clientId: string,
     partnerId: string | null,
+    /** 041: the project's branch — whose GSTIN, and so whose state, decides the tax basis. */
+    branchId?: string | null,
   ): Promise<{ issuerGstin: string | null; receiverGstin: string | null }> {
-    const company = await this.companies.getBillingIdentity(companyId);
+    const company = await this.companies.getBillingIdentity(
+      companyId,
+      branchId,
+    );
 
     if (direction === BillDirection.to_client) {
       const client = await tx.client.findFirst({
@@ -2922,7 +2938,7 @@ export class BillPackageService {
         where: { id: pkg.id },
         select: {
           direction: true,
-          project: { select: { name: true, clientId: true } },
+          project: { select: { name: true, clientId: true, branchId: true } },
           raBill: { select: { workOrderId: true } },
         },
       });

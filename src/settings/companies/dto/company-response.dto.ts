@@ -41,10 +41,16 @@ export class CompanyResponseDto {
   @ApiPropertyOptional() payrollDebitAccountNumber: string | null;
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;
+  /** 041: how many branches (GST registrations) the company has, on the list. */
+  @ApiPropertyOptional() branchCount?: number;
 
-  static fromEntity(company: Company): CompanyResponseDto {
+  static fromEntity(
+    company: Company,
+    branchCount?: number,
+  ): CompanyResponseDto {
     return {
       ...company,
+      ...(branchCount !== undefined ? { branchCount } : {}),
       pfEmployerRate: company.pfEmployerRate.toNumber(),
       esicEmployerRate: company.esicEmployerRate.toNumber(),
       gratuityRate: company.gratuityRate.toNumber(),

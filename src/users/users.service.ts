@@ -246,7 +246,10 @@ export class UsersService {
       status?: UserStatus;
       roleId?: string;
       companyId?: string;
-      sort?: { key: 'name' | 'email' | 'status' | 'lastLoginAt' | 'createdAt'; dir: 'asc' | 'desc' };
+      sort?: {
+        key: 'name' | 'email' | 'status' | 'lastLoginAt' | 'createdAt';
+        dir: 'asc' | 'desc';
+      };
       skip?: number;
       take?: number;
     } = {},
@@ -257,7 +260,9 @@ export class UsersService {
         ctx.isSuperAdmin ? {} : { companyId: ctx.companyId ?? null },
         filters.companyId ? { companyId: filters.companyId } : {},
         filters.status ? { status: filters.status } : {},
-        filters.roleId ? { userRoles: { some: { roleId: filters.roleId } } } : {},
+        filters.roleId
+          ? { userRoles: { some: { roleId: filters.roleId } } }
+          : {},
         q
           ? {
               OR: [
@@ -310,11 +315,15 @@ export class UsersService {
   async accountStatus(
     id: string,
     ctx: RlsContext,
-  ): Promise<{ status: UserStatus; email: string } | null> {
+  ): Promise<{
+    status: UserStatus;
+    email: string;
+    companyId: string | null;
+  } | null> {
     return withRlsContext(this.prisma, ctx, (tx) =>
       tx.user.findUnique({
         where: { id },
-        select: { status: true, email: true },
+        select: { status: true, email: true, companyId: true },
       }),
     );
   }
@@ -383,7 +392,9 @@ export class UsersService {
             code: 'ROLE_OF_ANOTHER_COMPANY',
             message: `${foreign
               .map((r) => r.name)
-              .join(', ')} belongs to another company and cannot be given to this account.`,
+              .join(
+                ', ',
+              )} belongs to another company and cannot be given to this account.`,
           });
         }
         const held = (
@@ -477,7 +488,10 @@ export class UsersService {
       this.prisma,
       { isSuperAdmin: true },
       (tx) =>
-        tx.userRole.findMany({ where: { userId: id }, select: { roleId: true } }),
+        tx.userRole.findMany({
+          where: { userId: id },
+          select: { roleId: true },
+        }),
     );
     return rows.map((r) => r.roleId);
   }

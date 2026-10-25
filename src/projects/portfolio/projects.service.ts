@@ -43,6 +43,7 @@ import {
 } from '../constants/projects.constants';
 import { ProjectWorkReference } from '../interfaces/pnl-sources.interface';
 import { ProjectSourcesRegistry } from './project-sources.registry';
+import { CompaniesService } from '../../settings/companies/companies.service';
 import {
   CreateProjectDto,
   ListProjectsDto,
@@ -67,6 +68,9 @@ export interface ProjectListItem {
   startDate: Date;
   expectedEndDate: Date | null;
   isLocked: boolean;
+  /** 041: the branch (GST registration) the project bills from, and its display name. */
+  branchId: string;
+  branch: string | null;
   /**
    * Present only when the caller asked for `include=documentReadiness` (017 FR-008).
    *
@@ -248,6 +252,9 @@ export class ProjectsService {
     // 2026-10-12. What a subcontractor bill has been certified and paid at is that service's
     // rule, not a second summation written here — see `positionForProject`.
     private readonly billPayments: BillPaymentsService,
+    // 041: a project bills from one of its company's branches — validated, and the head office
+    // resolved, through `settings`' exported service rather than its table.
+    private readonly companies: CompaniesService,
   ) {}
 
   /** See `ClientsService.targetCompanyOf()` for why the caller's own company is the
@@ -264,6 +271,28 @@ export class ProjectsService {
       );
     }
     return companyId;
+  }
+
+  /**
+   * The branch a project bills from (041), for the modules whose documents print it — plant's hire
+   * orders, inventory's store documents — without reading `projects.Project` (Principle I).
+   * Null for a project that is not this company's, which callers treat as the head office.
+   */
+  async branchIdOf(
+    companyId: string,
+    projectId: string | null | undefined,
+  ): Promise<string | null> {
+    if (!projectId) return null;
+    const row = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.project.findFirst({
+          where: { id: projectId, companyId },
+          select: { branchId: true },
+        }),
+    );
+    return row?.branchId ?? null;
   }
 
   async create(
@@ -297,6 +326,11 @@ export class ProjectsService {
     if (!clientExists) {
       throw new NotFoundException(`Client ${dto.clientId} not found`);
     }
+    // The branch the project bills from (041): the one named, or the head office.
+    const branchId = await this.companies.branchForNewRecord(
+      targetCompanyId,
+      dto.branchId,
+    );
 
     // 017 FR-009, FR-009a, FR-009c. **Before anything is written.** The gate refuses a creation
     // whose mandatory kinds are not all attached, naming each missing kind's label, and refuses a
@@ -352,6 +386,7 @@ export class ProjectsService {
             code,
             name: dto.name.trim(),
             clientId: dto.clientId,
+            branchId,
             location: dto.location ?? null,
             contractValue: dto.contractValue,
             startDate: new Date(dto.startDate),
@@ -502,6 +537,8 @@ export class ProjectsService {
             startDate: project.startDate,
             expectedEndDate: project.expectedEndDate,
             isLocked: project.isLocked,
+            branchId: project.branchId,
+            branch: null as string | null,
           })),
           total,
           page,
@@ -512,6 +549,13 @@ export class ProjectsService {
     );
 
     const { companyIds, ...page_ } = listed;
+    // Named through `settings` after the transaction closes (Principle I; Prisma cannot nest one).
+    const branchNames = await this.companies.branchLabels(
+      page_.items.map((item) => item.branchId),
+    );
+    for (const item of page_.items) {
+      item.branch = branchNames.get(item.branchId) ?? null;
+    }
     if (!wantsReadiness(query.include)) return page_;
 
     // FR-008: readiness in the LIST, without opening each project. Fetched after the
@@ -724,6 +768,15 @@ export class ProjectsService {
           }
         }
 
+        // 041. Moving a project to another branch changes what its *next* documents print; a bill
+        // already issued keeps the issuer it froze.
+        if (dto.branchId !== undefined && dto.branchId !== existing.branchId) {
+          await this.companies.assertActiveBranch(
+            existing.companyId,
+            dto.branchId,
+          );
+        }
+
         const updated = await tx.project.update({
           where: { id },
           data: {
@@ -731,6 +784,7 @@ export class ProjectsService {
             // mentioned — see ClientsService.update() for the same reasoning.
             ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
             ...(dto.clientId !== undefined ? { clientId: dto.clientId } : {}),
+            ...(dto.branchId !== undefined ? { branchId: dto.branchId } : {}),
             ...(dto.location !== undefined
               ? { location: dto.location || null }
               : {}),

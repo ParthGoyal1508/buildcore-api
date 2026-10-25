@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { DEFAULT_VENDOR_CATEGORIES } from '../../src/settings/vendor-categories/vendor-categories.service';
+import { headOfficeBranchId } from './company-branches.seed';
 
 /**
  * Local development fixtures for the My Workspace feature (003).
@@ -175,6 +176,7 @@ export async function seedWorkspaceFixtures(
       data: {
         userId,
         companyId: company.id,
+        branchId: await headOfficeBranchId(prisma, company.id),
         siteId: site.id,
         shiftId: shift.id,
         employeeCode,

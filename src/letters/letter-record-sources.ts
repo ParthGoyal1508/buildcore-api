@@ -3,7 +3,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 
 /** The record kinds a business module can answer for. `company` is read inside letters. */
-export type LetterRecordSourceType = 'employee' | 'candidate' | 'project';
+export type LetterRecordSourceType =
+  | 'employee'
+  | 'candidate'
+  | 'project'
+  // 041: answers only `branchId` — the branch of the project a work order (or its LOI) is on.
+  | 'work_order';
 
 /**
  * Reads one record for a letter, as a plain object `LetterKindField.sourcePath` is resolved

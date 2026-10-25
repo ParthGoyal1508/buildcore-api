@@ -315,6 +315,7 @@ export class SlipDeliveryService {
         const pdf = await this.pdf.render(view, nameOf(employee), logo);
         await this.email.sendPayslipEmail({
           to: address,
+          companyId: run.companyId,
           employeeName: nameOf(employee),
           periodLabel: label,
           companyName,

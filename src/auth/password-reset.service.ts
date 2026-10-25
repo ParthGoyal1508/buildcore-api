@@ -179,6 +179,7 @@ export class PasswordResetService {
     try {
       await this.email.sendPasswordResetEmail({
         to: user.email,
+        companyId: user.companyId,
         resetUrl: this.resetUrl(raw),
         expiresAt,
         requestedByAdmin: options.requestedById !== null,
@@ -330,6 +331,7 @@ export class PasswordResetService {
     try {
       await this.email.sendPasswordChangedEmail({
         to: user.email,
+        companyId: user.companyId,
         changedAt: now,
         via: 'reset_link',
       });

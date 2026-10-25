@@ -49,6 +49,16 @@ export class CreateEmployeeDto {
   @MaxLength(100)
   siteId: string;
 
+  /** 041: the company branch whose PF / ESIC establishment the employee is filed under. */
+  @ApiPropertyOptional({
+    description:
+      'Company branch (PF / ESIC establishment); defaults to the head office.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  branchId?: string;
+
   @ApiProperty({
     description: 'Shift whose duration overtime is computed against.',
   })
@@ -512,6 +522,14 @@ export class ListEmployeesQueryDto {
   @IsString()
   @MaxLength(100)
   siteId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Employees filed under this company branch only (041).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  branchId?: string;
 
   @ApiPropertyOptional({ description: 'Employees on this shift only.' })
   @IsOptional()

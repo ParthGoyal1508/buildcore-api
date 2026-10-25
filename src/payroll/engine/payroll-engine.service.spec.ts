@@ -46,6 +46,7 @@ const EMPLOYEE = {
   esicApplicable: false,
   esicUpperLimit: false,
   hoursPerDay: D(8),
+  branchId: 'branch-hr',
 };
 
 /** A line as `createMany` wrote it, with the Decimal columns a read returns. */
@@ -316,6 +317,29 @@ function build(
     approvals,
   };
 }
+
+describe('PayrollEngineService — the establishment a line is filed under (041)', () => {
+  it('stamps each line with the branch its employee is on', async () => {
+    const { service, created } = build({ existingRun: null });
+    await service.generate(caller, 'co-1', '2026-09');
+    expect(created[0]).toMatchObject({
+      employeeId: 'emp-1',
+      branchId: 'branch-hr',
+    });
+  });
+
+  it('restamps a regenerated draft after the employee moves branch', async () => {
+    const { service, created, prisma } = build({ existingRun: null });
+    await service.generate(caller, 'co-1', '2026-09');
+    (prisma.tx.employee.findMany as jest.Mock).mockResolvedValue([
+      { ...EMPLOYEE, branchId: 'branch-rj' },
+    ]);
+    await service.generate(caller, 'co-1', '2026-09');
+    expect(created[created.length - 1]).toMatchObject({
+      branchId: 'branch-rj',
+    });
+  });
+});
 
 describe('PayrollEngineService (036 stream 1a)', () => {
   describe('F1/F2 — generating a draft settles nothing', () => {

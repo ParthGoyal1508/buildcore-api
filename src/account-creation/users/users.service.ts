@@ -210,6 +210,7 @@ export class UsersService {
       try {
         await this.email.sendAccountReadyEmail({
           to: dto.email,
+          companyId: dto.companyId ?? null,
           loginUrl: `${this.appBaseUrl.replace(/\/+$/, '')}/login`,
           username: created.username,
         });
@@ -226,6 +227,7 @@ export class UsersService {
       try {
         await this.email.sendInviteEmail({
           to: dto.email,
+          companyId: dto.companyId ?? null,
           setPasswordUrl: this.setPasswordUrl(token.raw),
           isResend: false,
           expiresAt,
@@ -459,6 +461,7 @@ export class UsersService {
     try {
       await this.email.sendInviteEmail({
         to: user.email,
+        companyId: user.companyId,
         setPasswordUrl: this.setPasswordUrl(token.raw),
         isResend: true,
         expiresAt,

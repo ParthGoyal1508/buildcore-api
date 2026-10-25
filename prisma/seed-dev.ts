@@ -57,6 +57,8 @@ import {
 } from '../src/settings/document-kinds';
 import { DEFAULT_DOCUMENT_TYPES } from '../src/settings/reference-data/default-document-types';
 import { DEFAULT_VENDOR_CATEGORIES } from '../src/settings/vendor-categories/vendor-categories.service';
+import { headOfficeBranchId } from './seeds/company-branches.seed';
+import { GST_STATE_CODES } from '../src/common/gst-states';
 
 // Resolved before the client is built, because a remote target has to adjust
 // DATABASE_URL and `PrismaClient` reads it at construction.
@@ -2017,6 +2019,33 @@ const DESIGNATIONS = [
 const COMPANY_FILES =
   '/Users/parthgoyal/Projects/buildcore-backups/2026-10-18/company-files';
 
+/**
+ * 041 — each company's other GST registrations, beside the head office the company itself is
+ * created from. The states, places and addresses are the client's own (their Companies sheet,
+ * 2026-10-22); the GSTINs are built from this seed's PAN so they pass the same checks the app
+ * applies (state code, then PAN).
+ */
+const SEED_BRANCHES: Record<
+  string,
+  { state: string; city: string; address: string; pinCode: string; pf?: boolean }[]
+> = {
+  PRPL: [
+    { state: 'Delhi', city: 'Delhi', address: 'KH No 53/18 & 19, Block I, Village Holambi Kalan, North West Delhi', pinCode: '110082' },
+    { state: 'Maharashtra', city: 'Hingoli', address: '4-44, Ganeshwadi School, Risala Road, Risala Bazzar', pinCode: '431513' },
+    { state: 'Uttar Pradesh', city: 'Shahjahanpur', address: 'Near Kribhco Fertilizer Limited, Jalalabad Road, Piprola Ahmedpur', pinCode: '242223' },
+    { state: 'Gujarat', city: 'Godhra', address: 'Kaknu Thambala, Charan Jivabhai, Bhemabhai, Talav Faliya', pinCode: '389001' },
+  ],
+  TE: [
+    { state: 'Haryana', city: 'Rewari', address: 'Parshuram Colony, Tirupati Enterprises, Deoli, Bharawas Road', pinCode: '123401', pf: true },
+    { state: 'Maharashtra', city: 'Washim', address: 'In Front of SDPO Office, Bus Stand Road, Civil Line', pinCode: '444505', pf: true },
+    { state: 'Uttar Pradesh', city: 'Shahjahanpur', address: 'Moh Naveen Nagar, Near Reliance Petrol Pump, Jalalabad', pinCode: '242221', pf: true },
+    { state: 'Gujarat', city: 'Godhra', address: 'Kanku Thambhla Bus Stop, Jivabhai Bhemabhai Charan, Talav Faliyu', pinCode: '389002', pf: true },
+    { state: 'Bihar', city: 'Aurangabad', address: 'Ground Floor, NH 139, Near Electric Board, Gram Hardatta, Amba', pinCode: '824111', pf: true },
+    // The client recorded no PF code for Mandsaur; left blank so the missing-code warning shows.
+    { state: 'Madhya Pradesh', city: 'Mandsaur', address: 'House No. 64, Ward No. 2, Village Sandhara', pinCode: '458775' },
+  ],
+};
+
 const COMPANIES: CompanySpec[] = [
   {
     name: 'Parth Realcon Private Limited',
@@ -3365,6 +3394,36 @@ async function main() {
     }
     console.log(`\n  ${company.name} (${company.shortCode})`);
     await seedCompanyDefaults(company.id, roleId('Super Admin'));
+    // 041: the head office, then the company's other GST registrations. A project bills from the
+    // branch in the state it is in; an employee is filed under their site's project's branch.
+    const headOfficeId = await headOfficeBranchId(prisma, company.id);
+    const branchByState = new Map<string, string>([[spec.state, headOfficeId]]);
+    for (const [n, b] of (SEED_BRANCHES[spec.shortCode] ?? []).entries()) {
+      const branch = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('app.is_super_admin', 'true', true)`;
+        return tx.companyBranch.create({
+          data: {
+            companyId: company.id,
+            gstin: `${GST_STATE_CODES[b.state]}${spec.pan}1Z${(n + 1) % 10}`,
+            address: b.address,
+            city: b.city,
+            state: b.state,
+            pinCode: b.pinCode,
+            phone: spec.phone ?? null,
+            pfEstablishmentCode:
+              b.pf && company.pfEstablishmentCode
+                ? `${company.pfEstablishmentCode}/${n + 1}`
+                : null,
+          },
+        });
+      });
+      branchByState.set(b.state, branch.id);
+    }
+    const branchForLocation = (location: string | null | undefined) =>
+      [...branchByState].find(([state]) =>
+        location?.toLowerCase().includes(state.toLowerCase()),
+      )?.[1] ?? headOfficeId;
+    const branchOfProject = new Map<string, string>();
     // ── Masters ───────────────────────────────────────────────────────────────
     const depts = new Map<string, string>();
     for (const name of DEPARTMENTS) {
@@ -3436,6 +3495,7 @@ async function main() {
         await prisma.project.create({
           data: {
             companyId: company.id,
+            branchId: branchForLocation(p.location),
             code: p.code,
             name: p.name,
             clientId: clients[p.client].id,
@@ -3466,6 +3526,7 @@ async function main() {
         }),
       );
     }
+    for (const p of projects) branchOfProject.set(p.id, p.branchId);
 
     for (const h of [
       { name: 'Republic Day', date: '2027-01-26' },
@@ -3524,6 +3585,9 @@ async function main() {
         data: {
           userId: user?.id ?? null,
           companyId: company.id,
+          branchId:
+            branchOfProject.get(sites[i % sites.length].projectId ?? '') ??
+            headOfficeId,
           siteId: sites[i % sites.length].id,
           shiftId: generalShift.id,
           // The format the app's own generator produces, so codes issued later
@@ -5709,6 +5773,7 @@ async function ensureEmployeeFor(
     data: {
       userId,
       companyId,
+      branchId: await headOfficeBranchId(prisma, companyId),
       siteId: sites[seq.lastNumber % sites.length].id,
       shiftId: shift.id,
       employeeCode: `${spec.shortCode}-${String(seq.lastNumber).padStart(

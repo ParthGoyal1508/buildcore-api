@@ -10,6 +10,10 @@
  * it in here means there is a single place where delivery is configured, retried, or
  * swapped — rather than each feature growing its own sender and its own idea of what
  * a failed send means.
+ *
+ * Every message takes the recipient's `companyId` (2026-10-24): the email carries that company's
+ * logo, so a Parth Realcon employee and a Tirupati Enterprises employee each see their own. Null
+ * — an account with no home company — falls back to the group name.
  */
 export abstract class EmailService {
   /**
@@ -21,6 +25,7 @@ export abstract class EmailService {
    */
   abstract sendInviteEmail(input: {
     to: string;
+    companyId?: string | null;
     setPasswordUrl: string;
     /** A resend reads differently from a first invite — the recipient may have
      * already tried the earlier link and found it dead. */
@@ -31,6 +36,7 @@ export abstract class EmailService {
   /** Feature 001 FR-015: tells someone their account locked after repeated failures. */
   abstract sendAccountLockedEmail(input: {
     to: string;
+    companyId?: string | null;
     unlockAt: Date;
   }): Promise<void>;
 
@@ -40,6 +46,7 @@ export abstract class EmailService {
    */
   abstract sendPasswordResetEmail(input: {
     to: string;
+    companyId?: string | null;
     resetUrl: string;
     expiresAt: Date;
     requestedByAdmin: boolean;
@@ -48,19 +55,27 @@ export abstract class EmailService {
   /** After-the-fact notice that the password changed (029 FR-007, FR-013). */
   abstract sendPasswordChangedEmail(input: {
     to: string;
+    companyId?: string | null;
     changedAt: Date;
     via: 'self' | 'reset_link';
   }): Promise<void>;
 
   /** An admin set a temporary password; the value is never in the mail (029 FR-015). */
-  abstract sendAdminPasswordResetEmail(input: { to: string }): Promise<void>;
+  abstract sendAdminPasswordResetEmail(input: {
+    to: string;
+    companyId?: string | null;
+  }): Promise<void>;
 
   /** The account was deactivated (029 FR-030). */
-  abstract sendAccountDeactivatedEmail(input: { to: string }): Promise<void>;
+  abstract sendAccountDeactivatedEmail(input: {
+    to: string;
+    companyId?: string | null;
+  }): Promise<void>;
 
   /** An admin created the account with a password they chose (029 FR-031). */
   abstract sendAccountReadyEmail(input: {
     to: string;
+    companyId?: string | null;
     loginUrl: string;
     username: string | null;
   }): Promise<void>;
@@ -78,6 +93,7 @@ export abstract class EmailService {
    */
   abstract sendPayslipEmail(input: {
     to: string;
+    companyId?: string | null;
     employeeName: string;
     /** "February 2026", already worded — this transport does not format dates. */
     periodLabel: string;

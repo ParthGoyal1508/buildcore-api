@@ -61,6 +61,8 @@ export class PayrollRegisterService {
       departmentId?: string;
       projectId?: string;
       siteId?: string;
+      /** 041: one PF / ESIC establishment — the branch the line was filed under. */
+      branchId?: string;
     } = {},
   ) {
     const run = await this.requireProcessedRun(caller, runId);
@@ -84,6 +86,10 @@ export class PayrollRegisterService {
       // project the cost was attributed to, which may differ from where the
       // employee is posted today.
       if (filters.projectId && l.projectId !== filters.projectId) continue;
+      // The branch stamped on the line at generation (041); a line from before branches were
+      // recorded falls back to where the employee is filed today.
+      if (filters.branchId && (l.branchId ?? e.branchId) !== filters.branchId)
+        continue;
 
       const gross = r2(
         n(l.basic) +
@@ -139,7 +145,10 @@ export class PayrollRegisterService {
     // when unfiltered — a filtered view is legitimately a subset, and comparing
     // it to the whole run would produce a false alarm every time.
     const filtered = Boolean(
-      filters.departmentId || filters.projectId || filters.siteId,
+      filters.departmentId ||
+        filters.projectId ||
+        filters.siteId ||
+        filters.branchId,
     );
     const runNetTotal = r2(run.lineItems.reduce((a, l) => a + n(l.netPay), 0));
     const reconciliation =
@@ -221,6 +230,8 @@ export class PayrollRegisterService {
       departmentId?: string;
       projectId?: string;
       siteId?: string;
+      /** 041: one PF / ESIC establishment — the branch the line was filed under. */
+      branchId?: string;
     } = {},
   ): Promise<{ buffer: Buffer; filename: string }> {
     const register = await this.salaryRegister(caller, runId, filters);

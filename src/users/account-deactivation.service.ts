@@ -22,10 +22,14 @@ export class AccountDeactivationService {
   async afterDeactivation(account: {
     id: string;
     email: string;
+    companyId: string | null;
   }): Promise<void> {
     await this.refreshTokens.revokeAllForAccount(account.id);
     try {
-      await this.email.sendAccountDeactivatedEmail({ to: account.email });
+      await this.email.sendAccountDeactivatedEmail({
+        to: account.email,
+        companyId: account.companyId,
+      });
     } catch (error) {
       // The account is deactivated either way; the notice is a courtesy.
       this.logger.error(

@@ -83,7 +83,7 @@ export class StoreDocumentsService {
     );
     const { found, balances } = indent;
     const [company, items, sites, projectName] = await Promise.all([
-      this.company(found.companyId),
+      this.company(found.companyId, found.projectId),
       this.refs.itemsByIds(
         caller,
         found.lines.map((l) => l.itemId),
@@ -325,12 +325,15 @@ export class StoreDocumentsService {
       },
     );
     const grn = found.grn;
+    const receivingProject = this.refs
+      .projectOfSite(caller, found.siteId)
+      .catch(() => null);
     const [company, items, sites, vendors, projectId] = await Promise.all([
-      this.company(found.companyId),
+      this.company(found.companyId, receivingProject),
       this.refs.itemsByIds(caller, [found.itemId]),
       this.refs.siteNames(caller, [found.siteId]),
       this.refs.vendorNames(caller, [found.vendorId]),
-      this.refs.projectOfSite(caller, found.siteId).catch(() => null),
+      receivingProject,
     ]);
     const item = items.get(found.itemId);
     const project = await this.projectName(caller, projectId);
@@ -461,7 +464,7 @@ export class StoreDocumentsService {
     const ctx = rlsContextFor(caller);
     const [company, items, sites, project, activity, composites] =
       await Promise.all([
-        this.company(issue.companyId),
+        this.company(issue.companyId, issue.projectId),
         this.refs.itemsByIds(
           caller,
           issue.lines.map((line) => line.itemId),
@@ -616,13 +619,16 @@ export class StoreDocumentsService {
       query.siteId,
       companyId,
     );
+    const siteProject = this.refs
+      .projectOfSite(caller, query.siteId)
+      .catch(() => null);
     const [company, items, projectId, composites] = await Promise.all([
-      this.company(companyId),
+      this.company(companyId, siteProject),
       this.refs.itemsByIds(
         caller,
         rows.map((r) => r.itemId),
       ),
-      this.refs.projectOfSite(caller, query.siteId).catch(() => null),
+      siteProject,
       this.refs.compositeNames(
         caller,
         rows.flatMap((r) => (r.compositeItemId ? [r.compositeItemId] : [])),
@@ -740,11 +746,15 @@ export class StoreDocumentsService {
         return found;
       },
     );
+    const receivingProject = this.refs
+      .projectOfSite(caller, row.toSiteId)
+      .catch(() => null);
     const [company, items, sites, toProjectId] = await Promise.all([
-      this.company(row.companyId),
+      // A transfer is printed as the receiving project's branch — the registration taking the goods.
+      this.company(row.companyId, receivingProject),
       this.refs.itemsByIds(caller, [row.itemId]),
       this.refs.siteNames(caller, [row.fromSiteId, row.toSiteId]),
-      this.refs.projectOfSite(caller, row.toSiteId).catch(() => null),
+      receivingProject,
     ]);
     const toProject = await this.projectName(caller, toProjectId);
     const item = items.get(row.itemId);
@@ -764,8 +774,19 @@ export class StoreDocumentsService {
     };
   }
 
-  private async company(companyId: string) {
-    const identity = await this.companies.getDocumentIdentity(companyId);
+  /**
+   * The company as printed at a store document's head — as the branch (041) of the project the
+   * document belongs to, or the head office when it has none.
+   */
+  private async company(
+    companyId: string,
+    projectId?: string | null | Promise<string | null>,
+  ) {
+    const branchId = await this.projects.branchIdOf(companyId, await projectId);
+    const identity = await this.companies.getDocumentIdentity(
+      companyId,
+      branchId,
+    );
     return {
       name: identity.name.toUpperCase(),
       address: identity.address,

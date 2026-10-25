@@ -298,6 +298,8 @@ export class FnfService {
         data: {
           payrollRunId: created.id,
           employeeId,
+          // 041: filed under the establishment the leaver was on.
+          branchId: employee.branchId,
           monthDays: 0,
           payableDays: 0,
           lopDays: 0,

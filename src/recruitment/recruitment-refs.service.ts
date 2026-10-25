@@ -16,14 +16,16 @@ import { ExitService } from '../hr/offboarding/exit.service';
 import type { Caller } from '../hr/biometrics/face-enrolment.service';
 import type { CreateEmployeeDto } from '../hr/employees/dto/create-employee.dto';
 import type { UploadEmployeeDocumentDto } from '../hr/employees/documents/dto/upload-document.dto';
+import { ProjectsService } from '../projects/portfolio/projects.service';
+import { SitesService } from '../projects/sites/sites.service';
 
 /**
  * The recruitment module's single seam onto every other module (Principle I).
  *
  * Employee creation and document verification go through `hr`, the F&F-processed
  * check through `hr`'s ExitService, document types / kit items / letter templates /
- * company name through `settings`. Nothing in `recruitment` reads another schema
- * directly.
+ * company name through `settings`, a joiner's branch through `projects`. Nothing in
+ * `recruitment` reads another schema directly.
  */
 @Injectable()
 export class RecruitmentRefsService {
@@ -36,6 +38,8 @@ export class RecruitmentRefsService {
     private readonly kitItems: KitItemsService,
     private readonly companies: CompaniesService,
     private readonly configService: ConfigService,
+    private readonly projects: ProjectsService,
+    private readonly sites: SitesService,
   ) {}
 
   private get config(): RecruitmentConfig {
@@ -77,6 +81,22 @@ export class RecruitmentRefsService {
       dto,
     );
     return { id: created.id, employeeCode: created.employeeCode };
+  }
+
+  /**
+   * The branch a new joiner is filed under (041): the requisition's project's, else the project
+   * of the site they join at. Undefined — the head office — when neither names a project.
+   */
+  async branchForJoiner(
+    caller: AuthenticatedUser,
+    companyId: string,
+    projectId: string | null,
+    siteId: string,
+  ): Promise<string | undefined> {
+    const posting =
+      projectId ??
+      (await this.sites.getSiteById(rlsContextFor(caller), siteId)).projectId;
+    return (await this.projects.branchIdOf(companyId, posting)) ?? undefined;
   }
 
   /** Stores a verified document against an employee via 005's document surface. */

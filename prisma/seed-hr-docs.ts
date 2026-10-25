@@ -37,6 +37,7 @@ import {
   computePayrollLine,
   round2,
 } from '../src/payroll/engine/payroll-computation';
+import { headOfficeBranchId } from './seeds/company-branches.seed';
 
 // `.env` builds DATABASE_URL out of other variables; plain `dotenv/config` leaves the
 // `${…}` in place and the guard below could not read the host.
@@ -565,6 +566,7 @@ async function main() {
         create: {
           id: k(`employee:${p.code}`),
           companyId,
+          branchId: await headOfficeBranchId(prisma, companyId),
           siteId: siteAt(p.site).id,
           shiftId: shift.id,
           employeeCode,
@@ -1022,6 +1024,8 @@ async function processLastMonth(
           data: {
             payrollRunId: run!.id,
             employeeId: e.id,
+            // 041: filed under the establishment the employee is on, as the engine stamps it.
+            branchId: e.branchId,
             monthDays: f.monthDays,
             payableDays: f.payableDays,
             lopDays: f.lopDays,

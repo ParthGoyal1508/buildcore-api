@@ -58,6 +58,20 @@ export class ComposeLetterDto {
   @MaxLength(100)
   subjectId?: string;
 
+  /**
+   * 041: the company branch whose GSTIN and address the letter prints, for a letter with no
+   * project or employee to take it from (a purchase order to a vendor). Ignored when the subject
+   * is a project or the letter is about an employee — theirs is used. Omitted → head office.
+   */
+  @ApiPropertyOptional({
+    description:
+      'Company branch to issue from when the letter has no project or employee; defaults to the head office',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  branchId?: string;
+
   @ApiPropertyOptional({
     description:
       'Template variable values, `{{token}}` → text. Optional since 2026-10-13: a ' +
@@ -143,4 +157,18 @@ export class PrefillLetterQueryDto {
   @IsString()
   @MaxLength(100)
   subjectId?: string;
+
+  /**
+   * 041: the company branch whose GSTIN and address the letter prints, for a letter with no
+   * project or employee to take it from (a purchase order to a vendor). Ignored when the subject
+   * is a project or the letter is about an employee — theirs is used. Omitted → head office.
+   */
+  @ApiPropertyOptional({
+    description:
+      'Company branch to issue from when the letter has no project or employee; defaults to the head office',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  branchId?: string;
 }

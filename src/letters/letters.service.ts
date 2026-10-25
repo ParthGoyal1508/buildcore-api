@@ -54,6 +54,7 @@ import { expandLineItems, LineItemsError } from './line-items';
 import { nextReference, referencePrefix } from './letter-reference';
 import { assertNoRestrictedTypes, renderTemplate } from './template-resolver';
 import { webRoutes } from '../common/web-routes';
+import { CompaniesService } from '../settings/companies/companies.service';
 import { TermsTemplatesService } from '../settings/terms-templates/terms-templates.service';
 
 /** Where letter PDFs live in blob storage. */
@@ -68,6 +69,8 @@ export interface IssuedLetterView {
   candidateId: string | null;
   subjectType: string | null;
   subjectId: string | null;
+  /** 041: the company branch the letter is issued from; null = head office. */
+  branchId: string | null;
   /**
    * `PRPL/HR/2026-27/0001`, or null for a letter not yet issued (2026-10-11).
    *
@@ -130,6 +133,8 @@ interface LetterRecipient {
   /** A project letter's subject — the record its `project` fields read (2026-10-14). */
   subjectType?: string | null;
   subjectId?: string | null;
+  /** 041: the branch asked for, used only when neither the subject nor the employee gives one. */
+  branchId?: string | null;
 }
 
 /** What was typed at compose, as stored. Anything not a string is ignored. */
@@ -160,6 +165,7 @@ function toView(row: LetterRow): IssuedLetterView {
     candidateId: row.candidateId,
     subjectType: row.subjectType,
     subjectId: row.subjectId,
+    branchId: row.branchId,
     /** Null until issued — the number is allocated then, not at compose. */
     referenceNo: row.referenceNo,
     version: row.version,
@@ -203,7 +209,44 @@ export class LettersService {
     private readonly fields: LetterKindFieldsService,
     private readonly records: LetterRecordSources,
     private readonly terms: TermsTemplatesService,
+    // 041: the company as the branch a letter is issued from — `settings`' exported read.
+    private readonly companies: CompaniesService,
   ) {}
+
+  /**
+   * The company branch a letter is issued from (041): a project subject's branch, else the
+   * employee's, else the one the composer chose, else null — the head office. Records are read
+   * through the registry, as the letter's fields are, so this module still reads no business table.
+   */
+  private async branchFor(
+    caller: AuthenticatedUser,
+    companyId: string,
+    recipient: LetterRecipient,
+  ): Promise<string | null> {
+    const fromRecord = async (
+      kind: 'project' | 'work_order' | 'employee',
+      id?: string | null,
+    ) => {
+      if (!id) return null;
+      const record = await this.records
+        .resolve(caller, kind, id)
+        .catch(() => null);
+      const branchId = record?.branchId;
+      return typeof branchId === 'string' ? branchId : null;
+    };
+    const derived =
+      (recipient.subjectType === 'project'
+        ? await fromRecord('project', recipient.subjectId)
+        : recipient.subjectType === 'work_order'
+        ? await fromRecord('work_order', recipient.subjectId)
+        : null) ?? (await fromRecord('employee', recipient.employeeId));
+    if (derived) return derived;
+    if (!recipient.branchId) return null;
+    await this.companies.assertActiveBranch(companyId, recipient.branchId, {
+      allowInactive: true,
+    });
+    return recipient.branchId;
+  }
 
   /**
    * The compose form, filled in from the records (2026-10-13).
@@ -323,6 +366,7 @@ export class LettersService {
     this.assertLineItemsReadable(kind.key, resolvedNow);
     const variables = gated ? {} : resolvedNow;
 
+    const branchId = await this.branchFor(caller, companyId, dto);
     const row = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.issuedLetter.create({
         data: {
@@ -332,6 +376,7 @@ export class LettersService {
           candidateId: dto.candidateId ?? null,
           subjectType: dto.subjectType ?? null,
           subjectId: dto.subjectId ?? null,
+          branchId,
           templateId: template.id,
           signatoryId: dto.signatoryId ?? null,
           composedVariables: dto.variables ?? {},
@@ -518,6 +563,7 @@ export class LettersService {
           candidateId: original.candidateId,
           subjectType: original.subjectType,
           subjectId: original.subjectId,
+          branchId: original.branchId,
           templateId: original.templateId,
           signatoryId,
           composedVariables: typed,
@@ -704,6 +750,7 @@ export class LettersService {
         templateId: template.id,
         letterKind: kind,
         signatoryId: dto.signatoryId ?? null,
+        branchId: await this.branchFor(caller, companyId, dto),
       },
       variables,
       true,
@@ -909,21 +956,14 @@ export class LettersService {
         ? this.records.resolve(caller, 'project', recipient.subjectId)
         : null,
       withRlsContext(this.prisma, ctx, async (tx) => {
-        const row = await tx.company.findUnique({
-          where: { id: companyId },
-          select: {
-            name: true,
-            shortCode: true,
-            address: true,
-            city: true,
-            state: true,
-            pinCode: true,
-            gstin: true,
-            pan: true,
-            phone: true,
-            email: true,
-          },
-        });
+        // The company as the branch the letter is issued from (041) — its GSTIN, address and
+        // contacts — through `settings`' exported read rather than its tables.
+        const row = await this.companies
+          .getBranchIdentity(
+            companyId,
+            await this.branchFor(caller, companyId, recipient),
+          )
+          .catch(() => null);
         if (!row) return null;
         // The company's standard terms for each commercial document, as Settings holds them
         // (2026-10-14). They were set there and printed nowhere: a work order, LOI or PO went
@@ -977,6 +1017,8 @@ export class LettersService {
       letterKind: { key: string; label: string; requiresSignature: boolean };
       signatoryId: string | null;
       referenceNo?: string | null;
+      /** 041: the branch the header prints; null → head office. */
+      branchId?: string | null;
     },
     variables: Record<string, string>,
   ): Promise<{ ref: string; appliedSignatureRef: string | null }> {
@@ -1030,32 +1072,34 @@ export class LettersService {
       letterKind: { key: string; label: string; requiresSignature: boolean };
       signatoryId: string | null;
       referenceNo?: string | null;
+      /** 041: the branch the header prints; null → head office. */
+      branchId?: string | null;
     },
     variables: Record<string, string>,
     draft: boolean,
   ): Promise<{ pdf: Buffer; appliedSignatureRef: string | null }> {
-    const [template, company] = await withRlsContext(this.prisma, ctx, (tx) =>
-      Promise.all([
-        tx.letterTemplate.findFirst({
-          where: { id: letter.templateId, companyId },
-        }),
-        tx.company.findUnique({
-          where: { id: companyId },
-          select: {
-            letterheadRef: true,
-            logoRef: true,
-            name: true,
-            address: true,
-            city: true,
-            state: true,
-            pinCode: true,
-            phone: true,
-            email: true,
-            website: true,
-          },
-        }),
-      ]),
+    const [template, letterheadRow] = await withRlsContext(
+      this.prisma,
+      ctx,
+      (tx) =>
+        Promise.all([
+          tx.letterTemplate.findFirst({
+            where: { id: letter.templateId, companyId },
+          }),
+          tx.company.findUnique({
+            where: { id: companyId },
+            select: { letterheadRef: true },
+          }),
+        ]),
     );
+    // Name, logo, address and contacts as the branch the letter is issued from (041); the
+    // letterhead artwork stays the company's.
+    const identity = await this.companies
+      .getBranchIdentity(companyId, letter.branchId)
+      .catch(() => null);
+    const company = identity
+      ? { ...identity, letterheadRef: letterheadRow?.letterheadRef ?? null }
+      : null;
     if (!template) {
       throw new ConflictException({
         statusCode: 409,
@@ -1201,6 +1245,8 @@ export class LettersService {
       phone: string | null;
       email: string | null;
       website: string | null;
+      /** 041: false for a branch, whose address is not the registered office. */
+      isHeadOffice?: boolean;
     } | null,
   ): Promise<BrandHeader> {
     if (!company) return { logo: null, name: '', lines: [] };
@@ -1227,7 +1273,13 @@ export class LettersService {
       logo,
       name: company.name ?? '',
       lines: [
-        office ? `Registered Office: ${office}` : '',
+        office
+          ? `${
+              company.isHeadOffice === false
+                ? 'Branch Office'
+                : 'Registered Office'
+            }: ${office}`
+          : '',
         contact,
         company.website ? `Website: ${company.website}` : '',
       ].filter(Boolean),

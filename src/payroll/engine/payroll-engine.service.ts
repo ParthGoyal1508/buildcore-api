@@ -334,6 +334,9 @@ export class PayrollEngineService {
         payrollRunId: '',
         employeeId: employee.id,
         projectId: input.projectId,
+        // 041: the PF / ESIC establishment this line is filed under, as the employee stands now.
+        // Never re-read: moving the employee later does not move a processed month.
+        branchId: employee.branchId,
         monthDays: figures.monthDays,
         payableDays: figures.payableDays,
         lopDays: figures.lopDays,

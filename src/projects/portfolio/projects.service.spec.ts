@@ -6,6 +6,12 @@ import {
 } from '../../settings/testing/prisma-mock';
 import { ProjectsService } from './projects.service';
 
+/** 041: every project is on a branch; these tests do not care which, so the head office. */
+const COMPANIES_041 = {
+  branchForNewRecord: jest.fn().mockResolvedValue('branch-head-office'),
+  assertActiveBranch: jest.fn().mockResolvedValue(undefined),
+};
+
 /**
  * `findOne()` aggregates across four modules, two of which do not exist. The point
  * of these tests is that the absent ones degrade rather than throw — and that they
@@ -85,6 +91,7 @@ describe('ProjectsService.findOne', () => {
           ...billing,
         }),
       } as never,
+      COMPANIES_041 as never,
     );
   };
 
@@ -220,6 +227,7 @@ describe('ProjectsService outward contract', () => {
       } as never,
       // Never reached by these two — neither exercises `findOne` — but the constructor takes it.
       { positionForProject: jest.fn() } as never,
+      COMPANIES_041 as never,
     );
 
   it('reports the portfolio as available, which 007 branches on', () => {
@@ -280,6 +288,7 @@ describe('ProjectsService.remove', () => {
       } as never,
       // Never reached by these two — neither exercises `findOne` — but the constructor takes it.
       { positionForProject: jest.fn() } as never,
+      COMPANIES_041 as never,
     );
 
     const attempt = service.remove(caller, 'project-1', '10.0.0.1');
@@ -317,6 +326,7 @@ describe('ProjectsService.update — the lock permission', () => {
       { machinerySource: () => null, materialsSource: () => null } as never,
       {} as never,
       {} as never,
+      COMPANIES_041 as never,
     );
     return { service, update };
   };
