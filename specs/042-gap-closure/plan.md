@@ -99,6 +99,45 @@ Branches: `worktree-agent-a0fbffe7a73b12187` (1a, 6 commits, +884/−739 over 31
   `UpdatePurchaseDto`; labour daily search box wired to the 1b parameter; workers' NOC filter
   and partners RAG/BOCW filters wired server-side.
 
+### Wave 2: outcome (25-10-2026, three worktrees unmerged, awaiting review)
+
+All three: `tsc --noEmit` clean, eslint clean on touched files (the web repo's conventions —
+it has no test runner). Branches `042-wave2a` (+907/−21, 12 files), `042-wave2b` (+403/−103,
+12 files), `042-wave2c` (+269/−75, 8 files), all off `origin/main`.
+
+**Judgment calls made (reviewer to confirm):**
+- Reassign requires a reason (the DTO demands it; the brief had said optional) and offers any
+  active user as target — the server deliberately has no holder restriction; it refuses only
+  the person the item awaits. The queue screen doesn't get the action (its items always await
+  the caller).
+- Job card's operator stays free text — it mirrors the paper card and stores a name, not an
+  employee id; converting is a product decision, flagged, not done.
+- Letterhead lives on the company modal's Basic Info tab (edit mode); punch settings on a new
+  self-saving "Attendance" tab. Refusals and the Register are tabs inside the existing HR
+  attendance / reimbursements sections, so no new routes or permission-map entries.
+- Export honesty: RAG/BOCW export buttons say "Export all to Excel" while a filter is on (the
+  export routes take no filters).
+
+**Known caveats carried to Wave 3 / later:**
+- The register endpoint pins page 1 × 100 claims, so its subtotals describe at most 100 rows.
+- Reimbursements nav is gated on EMPLOYEES while the backend accepts EMPLOYEES or PAYROLL —
+  a PAYROLL-only holder can't reach the register through the nav (pre-existing).
+- Cross-company profile: attendance needed no client change (Wave 1a fixed the server); but
+  loans/payslips-style tabs are still company-pinned server-side and render EMPTY (not 404)
+  for a cross-company employee — backend work if those tabs should be truly cross-company.
+- Deployment coupling: the new query params 400 on an older API (forbidNonWhitelisted), so api
+  and web must deploy together.
+- Fuel-exceptions list now includes `hireBillDeduction`/`operatorRecovery` (fixed on the api
+  branch during Wave 2, commit 0658b61) — the reverse action renders only with that api.
+- `usePlantEquipment` in use-plant-refs.ts lost its last consumer; cleanup candidate.
+- Derived (not live-verified) zod schemas to check in Wave 3: PATCH purchase response;
+  reverse-recovery `{reversed}`; reassign response; company `punchAccuracyMaxMetres`/
+  `punchBlockEnforced` (+ both PUT responses); letterhead upload/GET; staff refusal rows;
+  reimbursement register. Quickest check: sign in on dev and open each new screen.
+- Local dev note: a `nest start --watch` running since before the merge keeps regenerating a
+  stale `src/metadata.ts` (deleted DTO reference); restart it, delete the file once, and local
+  `tsc` is clean again. The branch itself is unaffected (the file is git-ignored).
+
 ## Wave 3 — verification (me), after Wave 2 review
 
 `tsc` + unit suites in both repos, e2e where the fixtures allow, and a browser pass over every
