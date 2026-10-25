@@ -729,3 +729,52 @@ describe('AttendanceAdminService.modifications — naming the actor', () => {
     ]);
   });
 });
+
+describe("AttendanceAdminService.employeeMonth — the employee's own company (042)", () => {
+  /**
+   * User decision 25-10-2026: a cross-company employee profile stays reachable and every
+   * tab reads the EMPLOYEE's company. The attendance tab used to pin its lookup to the
+   * caller's *resolved* company — a group administrator's home or selected one — so the
+   * profile opened and its attendance answered 404. The lookup now mirrors the profile
+   * endpoint exactly: the row is resolved by id under the caller's RLS context, and the
+   * month is computed from the employee row's own ids.
+   */
+  it("serves an employee of a company other than the caller's resolved one", async () => {
+    const { service, employee, attendanceHistory } = build();
+    const crossCompany = {
+      id: 'emp-9',
+      companyId: 'co-2',
+      siteId: 'site-9',
+      shiftId: 'shift-9',
+    };
+    employee.findFirst.mockResolvedValue(crossCompany);
+    const getMonthForEmployee = jest.fn().mockResolvedValue({ days: [] });
+    (attendanceHistory as Record<string, unknown>).getMonthForEmployee =
+      getMonthForEmployee;
+
+    await service.employeeMonth(CALLER, 'emp-9', 9, 2026);
+
+    // Resolved by id alone — no caller-company pin on the lookup...
+    expect(employee.findFirst).toHaveBeenCalledWith({
+      where: { id: 'emp-9' },
+    });
+    // ...and the month is computed from the employee's own row, company and all.
+    expect(getMonthForEmployee).toHaveBeenCalledWith(
+      CALLER,
+      crossCompany,
+      9,
+      2026,
+    );
+  });
+
+  it('still answers 404 for an employee the caller cannot see', async () => {
+    // Row-level security is the visibility rule, exactly as on the profile: a caller
+    // whose RLS context cannot see the row gets "not found", never another company's data.
+    const { service, employee } = build();
+    employee.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.employeeMonth(CALLER, 'emp-9', 9, 2026),
+    ).rejects.toThrow(/Employee not found/);
+  });
+});
