@@ -302,45 +302,73 @@ export class LogbookSheetService {
       ...typed.keys(),
     ]);
 
-    // Readings first, so the fuel entries that follow find the day's logbook entry and their
-    // variance is computed against it.
-    for (const row of [...dto.rows].sort((a, b) =>
-      a.date.localeCompare(b.date),
-    )) {
-      if (
-        row.openingReading !== undefined &&
-        row.closingReading !== undefined
-      ) {
-        await this.logbook.create(
-          caller,
-          {
-            equipmentId: dto.equipmentId,
-            date: row.date,
-            openingReading: row.openingReading,
-            closingReading: row.closingReading,
-            ...(row.dieselQuantity ? { fuelConsumed: row.dieselQuantity } : {}),
-            ...(row.readingGapReason
-              ? { readingGapReason: row.readingGapReason }
-              : {}),
-          },
-          ipAddress,
-        );
-      }
+    // One transaction for the whole sheet (042). The pre-checks above already refuse
+    // everything the reading rules and billed periods can refuse before a single write;
+    // this makes the rest — a machine disposed mid-save, a fuel refusal, a database fault
+    // on row 19 — atomic too, so a failed save leaves no half-written month. Readings
+    // first, so the fuel entries that follow find the day's logbook entry in the same
+    // transaction and their variance is computed against it.
+    const written = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      async (tx) => {
+        const entries = [];
+        for (const row of [...dto.rows].sort((a, b) =>
+          a.date.localeCompare(b.date),
+        )) {
+          if (
+            row.openingReading !== undefined &&
+            row.closingReading !== undefined
+          ) {
+            entries.push(
+              await this.logbook.createInTx(
+                caller,
+                {
+                  equipmentId: dto.equipmentId,
+                  date: row.date,
+                  openingReading: row.openingReading,
+                  closingReading: row.closingReading,
+                  ...(row.dieselQuantity
+                    ? { fuelConsumed: row.dieselQuantity }
+                    : {}),
+                  ...(row.readingGapReason
+                    ? { readingGapReason: row.readingGapReason }
+                    : {}),
+                },
+                tx,
+              ),
+            );
+          }
+        }
+        const fills = [];
+        for (const row of dto.rows) {
+          if (row.dieselQuantity && row.dieselAmount !== undefined) {
+            fills.push(
+              await this.fuel.createInTx(
+                caller,
+                {
+                  equipmentId: dto.equipmentId,
+                  date: row.date,
+                  quantity: row.dieselQuantity,
+                  amount: row.dieselAmount,
+                  cardNo: row.cardNo,
+                },
+                tx,
+              ),
+            );
+          }
+        }
+        return { entries, fills };
+      },
+    );
+
+    // Audits and variance events only after the commit: an audit entry or an alert for a
+    // row that rolled back would describe something that never happened.
+    for (const entry of written.entries) {
+      await this.logbook.auditCreated(caller, entry, ipAddress);
     }
-    for (const row of dto.rows) {
-      if (row.dieselQuantity && row.dieselAmount !== undefined) {
-        await this.fuel.create(
-          caller,
-          {
-            equipmentId: dto.equipmentId,
-            date: row.date,
-            quantity: row.dieselQuantity,
-            amount: row.dieselAmount,
-            cardNo: row.cardNo,
-          },
-          ipAddress,
-        );
-      }
+    for (const fill of written.fills) {
+      await this.fuel.recordCreated(caller, fill, ipAddress);
     }
     return this.month(caller, dto.equipmentId, dto.month);
   }

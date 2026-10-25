@@ -254,6 +254,61 @@ describe('LogbookService (036 K2, K4, K5)', () => {
       ).rejects.toThrow(/more than 24/);
     });
 
+    // 042: a corrected closing figure can orphan the FOLLOWING day's opening reading,
+    // which was accepted against the old one. The next entry is re-checked.
+    const nextDayHarness = (next: Record<string, unknown> | null) => {
+      const harness = build();
+      harness.prisma.tx.logbookEntry.findUnique.mockResolvedValue(entry());
+      harness.prisma.tx.logbookEntry.findFirst.mockImplementation(
+        async ({ where }: { where: { date?: { gt?: Date; lt?: Date } } }) => {
+          if (where.date?.gt) return next;
+          if (where.date?.lt) return null;
+          return null; // The meter-sync query (lte).
+        },
+      );
+      return harness;
+    };
+
+    it("refuses a correction the next day's opening no longer follows (042)", async () => {
+      const { service, prisma } = nextDayHarness({
+        date: new Date('2026-10-06T00:00:00.000Z'),
+        openingReading: decimal(108),
+        readingGapReason: null,
+      });
+      await expect(
+        service.correctReadings(caller, 'lb-1', correction, 'ip'),
+      ).rejects.toThrow(/2026-10-06.*would no longer follow/);
+      expect(prisma.tx.logbookEntry.update).not.toHaveBeenCalled();
+    });
+
+    it('allows it when the next day carries a gap reason (042)', async () => {
+      const { service, prisma } = nextDayHarness({
+        date: new Date('2026-10-06T00:00:00.000Z'),
+        openingReading: decimal(108),
+        readingGapReason: 'Meter replaced',
+      });
+      prisma.tx.logbookEntry.update.mockResolvedValue(
+        entry({ closingReading: decimal(106), totalHours: decimal(6) }),
+      );
+      await expect(
+        service.correctReadings(caller, 'lb-1', correction, 'ip'),
+      ).resolves.toBeDefined();
+    });
+
+    it("allows it when the next day's opening follows the corrected closing (042)", async () => {
+      const { service, prisma } = nextDayHarness({
+        date: new Date('2026-10-06T00:00:00.000Z'),
+        openingReading: decimal(106),
+        readingGapReason: null,
+      });
+      prisma.tx.logbookEntry.update.mockResolvedValue(
+        entry({ closingReading: decimal(106), totalHours: decimal(6) }),
+      );
+      await expect(
+        service.correctReadings(caller, 'lb-1', correction, 'ip'),
+      ).resolves.toBeDefined();
+    });
+
     it('refuses a correction inside a paid hire bill', async () => {
       const { service, prisma } = build({
         bill: { ...billed, status: HireBillStatus.paid },

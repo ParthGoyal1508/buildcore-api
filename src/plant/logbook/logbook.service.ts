@@ -50,6 +50,11 @@ export interface LogbookRow {
   createdAt: Date;
 }
 
+/** A created entry with its equipment joined — what `createInTx` returns and `auditCreated` reads. */
+export type CreatedLogbookEntry = Prisma.LogbookEntryGetPayload<{
+  include: { equipment: { select: { code: true; name: true } } };
+}>;
+
 /**
  * The daily logbook (006 US3).
  *
@@ -156,6 +161,31 @@ export class LogbookService {
     dto: CreateLogbookEntryDto,
     ipAddress: string,
   ): Promise<LogbookRow> {
+    const created = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) => this.createInTx(caller, dto, tx),
+    );
+    await this.auditCreated(caller, created, ipAddress);
+    return this.toRow(caller, created);
+  }
+
+  /**
+   * The transactional core of `create` (042): every check and write, against the
+   * caller's transaction client. Extracted so the monthly sheet can write a whole
+   * month's entries in **one** transaction — a failure on any row rolls back every
+   * row — while the single-entry route keeps opening its own.
+   *
+   * The audit entry is deliberately NOT written here: it goes to the shared audit
+   * table outside this transaction, so one recorded here would survive a rollback and
+   * describe an entry that never existed. Callers record it with `auditCreated` after
+   * their transaction commits.
+   */
+  async createInTx(
+    caller: AuthenticatedUser,
+    dto: CreateLogbookEntryDto,
+    tx: Prisma.TransactionClient,
+  ): Promise<CreatedLogbookEntry> {
     if (dto.closingReading < dto.openingReading) {
       throw new BadRequestException(
         'closingReading cannot be less than openingReading — a meter does not run backwards.',
@@ -163,109 +193,108 @@ export class LogbookService {
     }
     const date = this.refs.parseDate(dto.date);
 
-    const created = await withRlsContext(
-      this.prisma,
-      rlsContextFor(caller),
-      async (tx) => {
-        const equipment = await tx.equipment.findUnique({
-          where: { id: dto.equipmentId },
-        });
-        if (!equipment) {
-          throw new BadRequestException(
-            `Equipment ${dto.equipmentId} does not exist.`,
-          );
-        }
-        assertInScope(caller, equipment, 'Equipment');
-        assertInService(equipment);
+    const equipment = await tx.equipment.findUnique({
+      where: { id: dto.equipmentId },
+    });
+    if (!equipment) {
+      throw new BadRequestException(
+        `Equipment ${dto.equipmentId} does not exist.`,
+      );
+    }
+    assertInScope(caller, equipment, 'Equipment');
+    assertInService(equipment);
 
-        // Checked before inserting so the caller gets a useful message; the UNIQUE
-        // index behind it (FR-003) is what makes the guarantee real under
-        // concurrency.
-        const clash = await tx.logbookEntry.findUnique({
-          where: {
-            equipmentId_date: { equipmentId: dto.equipmentId, date },
-          },
-        });
-        if (clash) {
-          throw new ConflictException(
-            `${equipment.code} already has a logbook entry for ${dto.date.slice(
-              0,
-              10,
-            )}. ` +
-              'One entry per machine per day — edit the existing one instead.',
-          );
-        }
-
-        await this.assertNotBilled(
-          tx,
-          { equipmentId: dto.equipmentId, date },
-          'added',
-        );
-
-        if (dto.operatorId) {
-          await this.refs.requireEmployee(
-            caller,
-            dto.operatorId,
-            equipment.companyId,
-          );
-        }
-        // 036 K2: the project must be one of the machine's company's — the same check fuel,
-        // hire orders and job cards make. Unchecked, an entry could carry any project id at all,
-        // including another company's, and its hours would land in that project's costs.
-        if (dto.projectId) {
-          await this.refs.requireProject(
-            caller,
-            dto.projectId,
-            equipment.companyId,
-          );
-        }
-
-        // 036 K4. The previous entry is the latest one *before* this date, so a backdated entry
-        // is checked against the day before it, not against whatever was entered last.
-        const previous = await tx.logbookEntry.findFirst({
-          where: { equipmentId: dto.equipmentId, date: { lt: date } },
-          orderBy: { date: 'desc' },
-          select: { closingReading: true },
-        });
-        const previousClosing = previous
-          ? Number(previous.closingReading)
-          : null;
-        const problem = readingProblem({
-          date: dto.date.slice(0, 10),
-          dateValue: date,
-          today: businessToday(),
-          meterType: equipment.meterType,
-          openingReading: dto.openingReading,
-          closingReading: dto.closingReading,
-          previousClosing,
-          readingGapReason: dto.readingGapReason,
-        });
-        if (problem) throw new BadRequestException(problem);
-
-        const entry = await tx.logbookEntry.create({
-          data: {
-            companyId: equipment.companyId,
-            equipmentId: dto.equipmentId,
-            date,
-            openingReading: dto.openingReading,
-            closingReading: dto.closingReading,
-            totalHours: dto.closingReading - dto.openingReading,
-            fuelConsumed: dto.fuelConsumed ?? null,
-            operatorId: dto.operatorId ?? null,
-            projectId: dto.projectId ?? null,
-            remarks: dto.remarks ?? null,
-            readingGapReason: hasReadingGap(dto.openingReading, previousClosing)
-              ? dto.readingGapReason?.trim() ?? null
-              : null,
-          },
-          include: { equipment: { select: { code: true, name: true } } },
-        });
-
-        await this.syncEquipmentFromLogbook(tx, caller, dto.equipmentId);
-        return entry;
+    // Checked before inserting so the caller gets a useful message; the UNIQUE
+    // index behind it (FR-003) is what makes the guarantee real under
+    // concurrency.
+    const clash = await tx.logbookEntry.findUnique({
+      where: {
+        equipmentId_date: { equipmentId: dto.equipmentId, date },
       },
+    });
+    if (clash) {
+      throw new ConflictException(
+        `${equipment.code} already has a logbook entry for ${dto.date.slice(
+          0,
+          10,
+        )}. ` +
+          'One entry per machine per day — edit the existing one instead.',
+      );
+    }
+
+    await this.assertNotBilled(
+      tx,
+      { equipmentId: dto.equipmentId, date },
+      'added',
     );
 
+    if (dto.operatorId) {
+      await this.refs.requireEmployee(
+        caller,
+        dto.operatorId,
+        equipment.companyId,
+      );
+    }
+    // 036 K2: the project must be one of the machine's company's — the same check fuel,
+    // hire orders and job cards make. Unchecked, an entry could carry any project id at all,
+    // including another company's, and its hours would land in that project's costs.
+    if (dto.projectId) {
+      await this.refs.requireProject(
+        caller,
+        dto.projectId,
+        equipment.companyId,
+      );
+    }
+
+    // 036 K4. The previous entry is the latest one *before* this date, so a backdated entry
+    // is checked against the day before it, not against whatever was entered last.
+    const previous = await tx.logbookEntry.findFirst({
+      where: { equipmentId: dto.equipmentId, date: { lt: date } },
+      orderBy: { date: 'desc' },
+      select: { closingReading: true },
+    });
+    const previousClosing = previous ? Number(previous.closingReading) : null;
+    const problem = readingProblem({
+      date: dto.date.slice(0, 10),
+      dateValue: date,
+      today: businessToday(),
+      meterType: equipment.meterType,
+      openingReading: dto.openingReading,
+      closingReading: dto.closingReading,
+      previousClosing,
+      readingGapReason: dto.readingGapReason,
+    });
+    if (problem) throw new BadRequestException(problem);
+
+    const entry = await tx.logbookEntry.create({
+      data: {
+        companyId: equipment.companyId,
+        equipmentId: dto.equipmentId,
+        date,
+        openingReading: dto.openingReading,
+        closingReading: dto.closingReading,
+        totalHours: dto.closingReading - dto.openingReading,
+        fuelConsumed: dto.fuelConsumed ?? null,
+        operatorId: dto.operatorId ?? null,
+        projectId: dto.projectId ?? null,
+        remarks: dto.remarks ?? null,
+        readingGapReason: hasReadingGap(dto.openingReading, previousClosing)
+          ? dto.readingGapReason?.trim() ?? null
+          : null,
+      },
+      include: { equipment: { select: { code: true, name: true } } },
+    });
+
+    await this.syncEquipmentFromLogbook(tx, caller, dto.equipmentId);
+    return entry;
+  }
+
+  /** The audit entry for a created entry, recorded once the writing transaction committed. */
+  async auditCreated(
+    caller: AuthenticatedUser,
+    created: CreatedLogbookEntry,
+    ipAddress: string,
+  ): Promise<void> {
     await this.auditLog.record({
       entityType: AuditEntityType.LOGBOOK_ENTRY,
       action: AuditAction.CREATE,
@@ -275,12 +304,10 @@ export class LogbookService {
       ipAddress,
       changes: {
         equipmentId: created.equipmentId,
-        date: dto.date.slice(0, 10),
+        date: created.date.toISOString().slice(0, 10),
         totalHours: Number(created.totalHours),
       },
     });
-
-    return this.toRow(caller, created);
   }
 
   /**
@@ -292,9 +319,11 @@ export class LogbookService {
    * same transaction, and the audit entry carries the reason with the readings before and after —
    * the only record of what the figures were.
    *
-   * The *next* day's opening reading is not re-checked: it was accepted against the old closing
-   * figure, and refusing this correction until that day is corrected too would leave a known-wrong
-   * reading in place. The screen says to check the following day.
+   * The *next* day's opening reading IS re-checked (042; it used to be left to the screen's
+   * "check the following day" note, which nobody reads): a correction whose new closing
+   * figure the following entry's opening no longer follows — with no gap reason recorded on
+   * that entry — is refused, naming the day. The two days are fixed next-day-first: the next
+   * day's own correction can carry a gap reason, so there is no deadlock.
    */
   async correctReadings(
     caller: AuthenticatedUser,
@@ -355,6 +384,34 @@ export class LogbookService {
           readingGapReason: dto.readingGapReason ?? existing.readingGapReason,
         });
         if (problem) throw new BadRequestException(problem);
+
+        // 042: the next day's opening reading was accepted against the closing figure this
+        // correction changes, so it is re-checked here. A correction that would leave the
+        // following entry's opening unexplained is refused, naming the day — correct that
+        // day first (giving it a gap reason there if the jump is real), then retry.
+        const next = await tx.logbookEntry.findFirst({
+          where: {
+            equipmentId: existing.equipmentId,
+            date: { gt: existing.date },
+          },
+          orderBy: { date: 'asc' },
+          select: { date: true, openingReading: true, readingGapReason: true },
+        });
+        if (
+          next &&
+          hasReadingGap(Number(next.openingReading), dto.closingReading) &&
+          !next.readingGapReason?.trim()
+        ) {
+          const nextDay = next.date.toISOString().slice(0, 10);
+          throw new BadRequestException(
+            `${nextDay}'s opening reading ${Number(
+              next.openingReading,
+            )} would no longer follow this day's corrected closing reading ${
+              dto.closingReading
+            }. Correct ${nextDay}'s readings first — give that day a gap reason if the ` +
+              'jump is real — then retry this correction.',
+          );
+        }
 
         const gapReason = hasReadingGap(dto.openingReading, previousClosing)
           ? (dto.readingGapReason ?? existing.readingGapReason)?.trim() ?? null
