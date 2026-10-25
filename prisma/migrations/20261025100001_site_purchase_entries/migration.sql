@@ -45,18 +45,19 @@ CREATE INDEX "Purchase_companyId_status_idx" ON "inventory"."Purchase"("companyI
 CREATE INDEX "AuditLogEntry_entityType_entityId_idx" ON "shared"."AuditLogEntry"("entityType", "entityId");
 
 -- Site Incharge records site deliveries (the client, 2026-10-25: the Site In-charge who already marks
--- labour attendance does this as well). Read and write, as every grant the standard roles carry.
+-- labour attendance does this as well), and Super Admin holds every permission, as each new one's
+-- migration has granted it. Read and write, as every grant the standard roles carry.
 SELECT set_config('app.is_super_admin', 'true', true);
 
 INSERT INTO "settings"."RolePermission" ("id", "roleId", "permission", "level", "createdAt", "createdBy")
 SELECT gen_random_uuid()::text, r."id", 'INVENTORY_SITE_ENTRY'::"settings"."Permission", levels."level", NOW(), 'migration:20261025100001_site_purchase_entries'
 FROM "settings"."Role" r
 CROSS JOIN (VALUES ('read'::"settings"."AccessLevel"), ('write'::"settings"."AccessLevel")) AS levels("level")
-WHERE r."name" = 'Site Incharge'
+WHERE r."name" IN ('Site Incharge', 'Super Admin')
 ON CONFLICT ("roleId", "permission", "level") DO NOTHING;
 
 UPDATE "settings"."Role" r
 SET "permissions" = array_append(r."permissions", 'INVENTORY_SITE_ENTRY'::"settings"."Permission"),
     "updatedAt" = NOW()
-WHERE r."name" = 'Site Incharge'
+WHERE r."name" IN ('Site Incharge', 'Super Admin')
   AND NOT ('INVENTORY_SITE_ENTRY' = ANY (r."permissions"));
