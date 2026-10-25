@@ -5,6 +5,7 @@ import { AuditLogService } from '../auth/audit-log.service';
 import { BiometricsService } from '../hr/biometrics/biometrics.service';
 import { FaceApiBiometricsService } from '../hr/biometrics/face-api-biometrics.service';
 import { ImageProcessingService } from '../hr/biometrics/image-processing.service';
+import { NocsModule } from '../nocs/nocs.module';
 import { PartnersModule } from '../partners/partners.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { SettingsModule } from '../settings/settings.module';
@@ -57,12 +58,15 @@ import { LabourSheetsService } from './reports/labour-sheets.service';
  */
 @Module({
   // ApprovalsModule (2026-10-20): a labour advance travels its approval chain.
+  // NocsModule (042): the worker list's NOC-status filter asks `NocsService` which workers
+  // are closed, instead of joining into the NOC table.
   imports: [
     SettingsModule,
     ProjectsModule,
     PartnersModule,
     UsersModule,
     ApprovalsModule,
+    NocsModule,
   ],
   controllers: [
     WageRateController,

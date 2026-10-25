@@ -9,5 +9,8 @@ import { NocsService } from './nocs.service';
   imports: [LettersModule],
   controllers: [NocsController],
   providers: [NocsService],
+  // 042: `labour` filters its worker list by NOC status through the exported service —
+  // the only route Principle I allows into another module's rows.
+  exports: [NocsService],
 })
 export class NocsModule {}
