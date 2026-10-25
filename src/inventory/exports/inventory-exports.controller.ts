@@ -6,7 +6,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Permission } from '@prisma/client';
+import { Permission, PurchaseStatus } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -92,6 +92,13 @@ export class InventoryExportsController {
         { header: 'Vendor', width: 26, value: (r) => r.vendorName },
         { header: 'Paid', format: 'money', value: (r) => r.paidAmount },
         { header: 'Bill status', value: (r) => r.paymentStatus },
+        {
+          header: 'Status',
+          value: (r) =>
+            r.status === PurchaseStatus.partial_site
+              ? 'Partially filled (Site)'
+              : 'Completed',
+        },
       ],
       rows,
       { Amount: totals.amount, Paid: totals.paidAmount },

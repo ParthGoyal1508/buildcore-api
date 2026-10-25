@@ -2,6 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { LettersModule } from '../letters/letters.module';
+import { LabourModule } from '../labour/labour.module';
 import { PartnersModule } from '../partners/partners.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { CompositeItemsService } from '../settings/item-masters/composite-items.service';
@@ -29,6 +30,8 @@ import { PurchaseOrdersService } from './purchase-orders/purchase-orders.service
 import { PurchasesController } from './purchases/purchases.controller';
 import { PurchasesService } from './purchases/purchases.service';
 import { VendorItemRateService } from './rates/vendor-item-rate.service';
+import { SiteEntriesController } from './site-entries/site-entries.controller';
+import { SiteEntriesService } from './site-entries/site-entries.service';
 import { StockController } from './stock/stock.controller';
 import { StockQueryService } from './stock/stock-query.service';
 import { StockService } from './stock/stock.service';
@@ -60,6 +63,9 @@ import { TransfersService } from './transfers/transfers.service';
     forwardRef(() => ProjectsModule),
     PartnersModule,
     LettersModule,
+    // 043: a site entry's store is the caller's assigned site, which `labour` owns. forwardRef: labour
+    // reaches back here through projects → hr → payroll → plant.
+    forwardRef(() => LabourModule),
   ],
   controllers: [
     CategoriesController,
@@ -67,6 +73,7 @@ import { TransfersService } from './transfers/transfers.service';
     CompositeItemsController,
     StockController,
     PurchasesController,
+    SiteEntriesController,
     IssuesController,
     TransfersController,
     PaymentsController,
@@ -79,6 +86,7 @@ import { TransfersService } from './transfers/transfers.service';
     StockService,
     StockQueryService,
     PurchasesService,
+    SiteEntriesService,
     PurchaseOrdersService,
     VendorItemRateService,
     IssuesService,
