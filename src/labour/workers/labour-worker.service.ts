@@ -37,6 +37,7 @@ import {
   PII_VISIBLE_CHARS,
   WORKER_FACE_NAMESPACE,
 } from '../constants/labour.constants';
+import { NocsService } from '../../nocs/nocs.service';
 import { LabourRefsService } from '../labour-refs.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
 
@@ -82,6 +83,7 @@ export class LabourWorkerService {
     private readonly biometrics: BiometricsService,
     private readonly images: ImageProcessingService,
     private readonly supervisorSites: SupervisorSiteService,
+    private readonly nocs: NocsService,
   ) {}
 
   private toListItem(row: {
@@ -126,6 +128,7 @@ export class LabourWorkerService {
       skillCategoryId?: string;
       status?: WorkerStatus;
       search?: string;
+      nocStatus?: 'open' | 'closed';
       page?: number;
       pageSize?: number;
     },
@@ -164,6 +167,15 @@ export class LabourWorkerService {
           }
         : {}),
     };
+
+    // 042: the NOC open/closed filter works across the whole register, not the loaded page.
+    // The closed set comes from `NocsService` (Principle I), already scoped by RLS, and lands
+    // in the same query as the pagination so the counts stay honest.
+    if (query.nocStatus) {
+      const closed = await this.nocs.closedSubjectIds(caller, 'labour_worker');
+      where.id =
+        query.nocStatus === 'closed' ? { in: closed } : { notIn: closed };
+    }
 
     const { items, total } = await withRlsContext(
       this.prisma,

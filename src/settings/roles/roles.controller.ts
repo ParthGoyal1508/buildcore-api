@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -24,6 +25,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CreateRoleDto } from './dto/create-role.dto';
+import { ListRolesQueryDto } from './dto/list-roles.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { RoleWithAssignedCount, RolesService } from './roles.service';
 
@@ -38,11 +40,15 @@ export class RolesController {
   @Get()
   @ApiOperation({
     summary: 'List roles with their assigned-user counts (FR-009)',
+    description:
+      '`grantable=true` returns only the roles the caller may actually assign (042), by the ' +
+      'grant ceiling the invite and user endpoints already enforce on submit.',
   })
   async findAll(
     @UserEntity() caller: AuthenticatedUser,
+    @Query() query: ListRolesQueryDto,
   ): Promise<RoleWithAssignedCount[]> {
-    return this.rolesService.findAll(caller);
+    return this.rolesService.findAll(caller, { grantable: query.grantable });
   }
 
   @Post()

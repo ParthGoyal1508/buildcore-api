@@ -144,6 +144,31 @@ export class NocsService {
     return rows.map((row) => this.toView(row));
   }
 
+  /**
+   * The ids of every `subjectType` record of the caller's scope that a closing NOC has been
+   * uploaded for (042). The whole set, not a page: a list endpoint filtering by NOC status
+   * (`GET /labour/workers?nocStatus=…`) needs it inside its own paginated query, where a
+   * per-page `statuses` call cannot reach. RLS scopes the rows to the caller's company.
+   */
+  async closedSubjectIds(
+    caller: AuthenticatedUser,
+    subjectType: NocSubject,
+  ): Promise<string[]> {
+    this.assertMay(caller, subjectType, AccessLevel.read);
+    const rows = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.nocDocument.findMany({
+          where: { subjectType },
+          select: { subjectType: true, subjectId: true, stage: true },
+        }),
+    );
+    return [
+      ...new Set(rows.filter((row) => nocCloses(row)).map((r) => r.subjectId)),
+    ];
+  }
+
   /** Open or closed, for each of a page of records of one type. */
   async statuses(
     caller: AuthenticatedUser,
