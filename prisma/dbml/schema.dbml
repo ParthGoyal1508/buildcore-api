@@ -3994,6 +3994,8 @@ pattern as `EmployeeDocument`/`ProjectDocument`.']
 Both are required **before approval, not at creation**: a storekeeper photographing a load at
 dusk with no signal must still be able to record that it arrived. Nullable for that reason and
 because the rule is not retrospective — purchases recorded before it existed keep their gaps.']
+  extraPhotoFileRefs String[] [not null, note: 'The site\'s second to fifth delivery photos (043), in the order taken; `photoFileRef` is the
+first. Empty for every purchase with one photo or none.']
   remarks String
   indentLineId String [note: 'The indent line this purchase fulfils, if it came from one (FR-023).']
   indentLine MaterialIndentLine

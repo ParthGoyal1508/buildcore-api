@@ -109,7 +109,7 @@ describe('Site purchase entries (e2e)', () => {
     itemId,
     deliveredAt: new Date().toISOString(),
     vehicleNo: 'mh 12 ab 1234',
-    photo: PNG_1PX,
+    photos: [PNG_1PX],
     ...SITE,
     accuracyMeters: 15,
     capturedAt: new Date().toISOString(),
@@ -254,7 +254,13 @@ describe('Site purchase entries (e2e)', () => {
       const res = await http()
         .post('/inventory/site-entries')
         .set(auth(siteToken))
-        .send(entry({ clientRequestId: requestId, siteId: 'not-mine' }))
+        .send(
+          entry({
+            clientRequestId: requestId,
+            siteId: 'not-mine',
+            photos: [PNG_1PX, PNG_1PX],
+          }),
+        )
         .expect(201);
       id = res.body.id;
       expect(res.body).toMatchObject({
@@ -309,6 +315,24 @@ describe('Site purchase entries (e2e)', () => {
           gps: expect.objectContaining({ latitude: SITE.latitude }),
         }),
       ]);
+    });
+
+    it("serves each of the site's photos to Head Office", async () => {
+      const list = await http()
+        .get('/inventory/purchases')
+        .query({ status: 'partial_site', itemId })
+        .set(auth(adminToken))
+        .expect(200);
+      expect(list.body.purchases[0].photoCount).toBe(2);
+      const second = await http()
+        .get(`/inventory/purchases/${id}/photo?n=2`)
+        .set(auth(adminToken))
+        .expect(200);
+      expect(second.headers['content-type']).toMatch(/^image\//);
+      await http()
+        .get(`/inventory/purchases/${id}/photo?n=3`)
+        .set(auth(adminToken))
+        .expect(404);
     });
 
     it('lets Head Office correct the vehicle, keeping what it was in the history', async () => {

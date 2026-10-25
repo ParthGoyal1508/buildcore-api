@@ -4,6 +4,8 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { Permission, Prisma } from '@prisma/client';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 
 import { PERMISSIONS_KEY } from '../../common/decorators/permissions.decorator';
 import {
@@ -26,7 +28,7 @@ const dto = (over: Partial<CreateSiteEntryDto> = {}): CreateSiteEntryDto => ({
   itemId: 'item-1',
   deliveredAt: new Date().toISOString(),
   vehicleNo: ' mh 12 ab 1234 ',
-  photo: 'aGVsbG8=',
+  photos: ['aGVsbG8='],
   latitude: SITE.latitude,
   longitude: SITE.longitude,
   accuracyMeters: 10,
@@ -262,6 +264,48 @@ describe('SiteEntriesService.create — what is saved (043)', () => {
     const view = await service.create(caller, dto(), '127.0.0.1');
     expect(view.id).toBe('pur-1');
     expect(storage.deleteMany).toHaveBeenCalledWith(['photo-ref']);
+  });
+});
+
+describe('SiteEntriesService.create — several photos (043)', () => {
+  it('keeps the first photo where every reader looks, and the rest in order', async () => {
+    const { service, prisma, purchases } = build();
+    purchases.storeUpload.mockImplementation((payload: string) =>
+      Promise.resolve(`ref-${payload}`),
+    );
+    await service.create(
+      caller,
+      dto({ photos: ['a', 'b', 'c', 'd', 'e'] }),
+      '127.0.0.1',
+    );
+    expect(prisma.tx.purchase.create.mock.calls[0][0].data).toMatchObject({
+      photoFileRef: 'ref-a',
+      extraPhotoFileRefs: ['ref-b', 'ref-c', 'ref-d', 'ref-e'],
+    });
+  });
+
+  it('removes the photos already stored when a later one fails, saving nothing', async () => {
+    const { service, prisma, purchases, storage } = build();
+    purchases.storeUpload
+      .mockResolvedValueOnce('ref-1')
+      .mockResolvedValueOnce('ref-2')
+      .mockRejectedValueOnce(new Error('not an image'));
+    await expect(
+      service.create(caller, dto({ photos: ['a', 'b', 'c'] }), '127.0.0.1'),
+    ).rejects.toThrow('not an image');
+    expect(storage.deleteMany).toHaveBeenCalledWith(['ref-1', 'ref-2']);
+    expect(prisma.tx.purchase.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts one to five photos and refuses none or six', async () => {
+    const errors = (photos: string[]) =>
+      validate(plainToInstance(CreateSiteEntryDto, { ...dto(), photos })).then(
+        (all) => all.filter((e) => e.property === 'photos'),
+      );
+    expect(await errors(['aGVsbG8='])).toHaveLength(0);
+    expect(await errors(Array(5).fill('aGVsbG8='))).toHaveLength(0);
+    expect(await errors([])).toHaveLength(1);
+    expect(await errors(Array(6).fill('aGVsbG8='))).toHaveLength(1);
   });
 });
 

@@ -1,12 +1,14 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Delete,
   Get,
   HttpCode,
   HttpStatus,
   Ip,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Query,
@@ -82,14 +84,19 @@ export class PurchasesController {
   @Get(':id/photo')
   @ApiOperation({
     summary: 'The delivery photograph taken at the gate (036 M11)',
+    description:
+      "`n` picks which, from 1 (default) to the purchase's `photoCount` — a site entry may carry " +
+      'up to five (043).',
   })
   async photo(
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
+    @Query('n', new DefaultValuePipe(1), ParseIntPipe) n: number,
   ): Promise<StreamableFile> {
     const { buffer, contentType } = await this.purchases.getPhotoFile(
       caller,
       id,
+      n,
     );
     return new StreamableFile(buffer, { type: contentType });
   }

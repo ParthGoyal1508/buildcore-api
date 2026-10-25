@@ -96,6 +96,8 @@ export interface PurchaseView {
   purchaseOrderLineNo: number | null;
   /** Whether a delivery photograph is stored (036 M11) — `GET :id/photo`. */
   hasPhoto: boolean;
+  /** How many delivery photos — `GET :id/photo?n=` serves each, from 1 (043: up to five). */
+  photoCount: number;
   remarks: string | null;
   createdAt: Date;
   /** 043: a site entry waits as `partial_site` until Head Office completes it. */
@@ -145,6 +147,18 @@ function poRefOf(purchase: {
       purchase.purchaseOrderLine?.purchaseOrder.referenceNo ?? null,
     purchaseOrderLineNo: purchase.purchaseOrderLine?.lineNo ?? null,
   };
+}
+
+/** A purchase's delivery photos in the order taken — the first, then a site entry's others (043). */
+function photoRefsOf(purchase: {
+  photoFileRef: string | null;
+  extraPhotoFileRefs: string[];
+}): string[] {
+  return [
+    ...(purchase.photoFileRef ? [purchase.photoFileRef] : []),
+    // `?? []`: the column is nullable in SQL (Prisma lists are), though every row gets `{}`.
+    ...(purchase.extraPhotoFileRefs ?? []),
+  ];
 }
 
 /** The 043 fields every purchase view carries, with the creator and completer named. */
@@ -396,6 +410,7 @@ export class PurchasesService {
       indentLineId: dto.indentLineId ?? null,
       ...poRefOf(created.purchase),
       hasPhoto: photoFileRef !== null,
+      photoCount: photoFileRef !== null ? 1 : 0,
       remarks: created.purchase.remarks,
       createdAt: created.purchase.createdAt,
       ...siteFieldsOf(
@@ -883,6 +898,7 @@ export class PurchasesService {
           indentLineId: row.indentLineId,
           ...poRefOf(row),
           hasPhoto: row.photoFileRef !== null,
+          photoCount: photoRefsOf(row).length,
           remarks: row.remarks,
           createdAt: row.createdAt,
           ...siteFieldsOf(row, people),
@@ -914,14 +930,17 @@ export class PurchasesService {
   async getPhotoFile(
     caller: AuthenticatedUser,
     id: string,
+    /** Which photo, from 1 — a site entry may carry up to five (043). */
+    n = 1,
   ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
-    return this.storedFile(caller, id, 'photo');
+    return this.storedFile(caller, id, 'photo', n);
   }
 
   private async storedFile(
     caller: AuthenticatedUser,
     id: string,
     which: 'bill' | 'photo',
+    n = 1,
   ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
     const purchase = await withRlsContext(
       this.prisma,
@@ -932,7 +951,10 @@ export class PurchasesService {
       throw new NotFoundException(`Purchase ${id} not found`);
     }
     assertInScope(caller, purchase, `Purchase ${id}`);
-    const ref = which === 'bill' ? purchase.billFileRef : purchase.photoFileRef;
+    const ref =
+      which === 'bill'
+        ? purchase.billFileRef
+        : photoRefsOf(purchase)[n - 1] ?? null;
     if (!ref) {
       throw new NotFoundException(
         which === 'bill'
@@ -1232,10 +1254,9 @@ export class PurchasesService {
     // turn a completed delete into an error. The bill is kept, deliberately: it is the vendor's
     // document of a transaction that happened and was then reversed, and the soft-deleted row
     // still points at it for whoever audits the reversal.
-    if (removed.photoFileRef) {
-      await this.storage
-        .deleteMany([removed.photoFileRef])
-        .catch(() => undefined);
+    const photos = photoRefsOf(removed);
+    if (photos.length > 0) {
+      await this.storage.deleteMany(photos).catch(() => undefined);
     }
   }
 
