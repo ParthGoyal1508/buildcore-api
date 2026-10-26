@@ -7338,6 +7338,8 @@ enum PowerSource {
   petrol
   electric
   manual
+  /// Compressed natural gas (2026-10-26) — the client's Tiago, Tigor and Eicher run on it.
+  cng
 
   @@schema("plant")
 }
@@ -7606,6 +7608,9 @@ model EquipmentRegistrationItem {
 
   kind      RegistrationKind
   status    RegistrationStatus @default(held)
+  /// When the paper was issued (2026-10-26) — the client's machine documents sheet records it
+  /// beside the expiry. Kept for a lifetime paper too; not applicable has none.
+  issuedAt  DateTime?          @db.Date
   expiresAt DateTime?          @db.Date
   /// The policy or permit number, where the paper has one.
   number    String?

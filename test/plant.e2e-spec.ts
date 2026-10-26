@@ -421,6 +421,41 @@ describe('Plant module (e2e)', () => {
       expect(made.body.registrationNo).toBe(plate);
     });
 
+    // 2026-10-26: CNG is a power source, and a paper keeps the day it was issued — except a paper
+    // that does not apply, which was never issued.
+    it('takes a CNG machine, and keeps each paper’s issue date', async () => {
+      const made = await http()
+        .post(`/plant/equipment?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          name: 'Tata Tiago',
+          categoryId,
+          ownership: 'owned',
+          powerSource: 'cng',
+          registration: [
+            {
+              kind: 'insurance',
+              status: 'held',
+              issuedAt: '2025-12-03',
+              expiresAt: '2026-12-02',
+              number: 'POL-1',
+            },
+            { kind: 'road_tax', status: 'lifetime', issuedAt: '2023-12-06' },
+            { kind: 'permit', status: 'not_applicable', issuedAt: '2024-01-01' },
+          ],
+        })
+        .expect(201);
+      createdEquipmentIds.push(made.body.id);
+
+      expect(made.body.powerSource).toBe('cng');
+      const paper = (kind: string) =>
+        made.body.registration.find((p: { kind: string }) => p.kind === kind);
+      expect(paper('insurance').issuedAt).toMatch(/^2025-12-03/);
+      expect(paper('insurance').expiresAt).toMatch(/^2026-12-02/);
+      expect(paper('road_tax').issuedAt).toMatch(/^2023-12-06/);
+      expect(paper('permit').issuedAt).toBeNull();
+    });
+
     it('copies the meter type from the category', async () => {
       const equipment = await http()
         .get(`/plant/equipment/${ownedEquipmentId}`)

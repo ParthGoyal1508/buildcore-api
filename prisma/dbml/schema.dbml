@@ -4525,6 +4525,8 @@ Table EquipmentRegistrationItem {
   equipment Equipment [not null]
   kind RegistrationKind [not null]
   status RegistrationStatus [not null, default: 'held']
+  issuedAt DateTime [note: 'When the paper was issued (2026-10-26) — the client\'s machine documents sheet records it
+beside the expiry. Kept for a lifetime paper too; not applicable has none.']
   expiresAt DateTime
   number String [note: 'The policy or permit number, where the paper has one.']
   createdAt DateTime [default: `now()`, not null]
@@ -6861,6 +6863,7 @@ Enum PowerSource {
   petrol
   electric
   manual
+  cng
 }
 
 Enum EquipmentStatus {
