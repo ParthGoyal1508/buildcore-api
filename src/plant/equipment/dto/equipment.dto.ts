@@ -44,6 +44,14 @@ export class RegistrationItemDto {
   @IsEnum(RegistrationStatus)
   status!: RegistrationStatus;
 
+  @ApiPropertyOptional({
+    example: '2026-07-01',
+    description: 'When the paper was issued. Ignored for a paper that is not applicable.',
+  })
+  @IsOptional()
+  @IsISO8601()
+  issuedAt?: string;
+
   @ApiPropertyOptional({ example: '2027-06-30' })
   @IsOptional()
   @IsISO8601()
