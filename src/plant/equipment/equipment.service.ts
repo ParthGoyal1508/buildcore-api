@@ -68,6 +68,7 @@ export interface EquipmentDocumentView {
 export interface RegistrationPaperView {
   kind: RegistrationKind;
   status: RegistrationStatus;
+  issuedAt: Date | null;
   expiresAt: Date | null;
   number: string | null;
   /** Whether a document of the matching type has been uploaded — the register's "Doc" column. */
@@ -550,6 +551,7 @@ export class EquipmentService {
         {
           kind,
           status: item?.status ?? RegistrationStatus.held,
+          issuedAt: item?.issuedAt ?? null,
           expiresAt: item?.expiresAt ?? null,
           number: item?.number ?? null,
           hasDocument: uploaded.has(kind),
@@ -600,8 +602,14 @@ export class EquipmentService {
         item.status === RegistrationStatus.held && item.expiresAt
           ? this.refs.parseDate(item.expiresAt)
           : null;
+      // A life-time paper was still issued on a day; a not-applicable one never was.
+      const issuedAt =
+        item.status !== RegistrationStatus.not_applicable && item.issuedAt
+          ? this.refs.parseDate(item.issuedAt)
+          : null;
       const data = {
         status: item.status,
+        issuedAt,
         expiresAt,
         number: item.number?.trim() || null,
       };
