@@ -33,7 +33,6 @@ import {
   CorrectLogbookReadingsDto,
   CreateLogbookEntryDto,
   ListLogbookDto,
-  UpdateLogbookEntryDto,
 } from './dto/logbook.dto';
 import { LogbookService } from './logbook.service';
 
@@ -181,22 +180,6 @@ export class LogbookController {
     @Ip() ipAddress: string,
   ) {
     return this.logbook.create(caller, dto, ipAddress);
-  }
-
-  @Patch(':id')
-  @ApiOperation({
-    summary: 'Correct fuel, operator or remarks',
-    description:
-      'Readings are not changed here — every derived figure depends on them. ' +
-      'Use PATCH :id/readings, which requires a reason (036 K6).',
-  })
-  async update(
-    @UserEntity() caller: AuthenticatedUser,
-    @Param('id') id: string,
-    @Body() dto: UpdateLogbookEntryDto,
-    @Ip() ipAddress: string,
-  ) {
-    return this.logbook.update(caller, id, dto, ipAddress);
   }
 
   @Patch(':id/readings')

@@ -57,38 +57,6 @@ export class CreateMaintenanceJobDto {
   card?: JobCardDto;
 }
 
-/**
- * `partsCost` is absent: it accrues from spare part consumption (FR-018) and is
- * never client-supplied, for the same reason a hire bill's TDS is not.
- */
-export class UpdateMaintenanceJobDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(1000)
-  description?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(1000)
-  partsDescription?: string;
-
-  @ApiPropertyOptional({ description: "The workshop's own labour, in rupees" })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  @Max(999_999_999_999_999)
-  labourCost?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  linkedServiceScheduleId?: string;
-}
-
 export class CloseMaintenanceJobDto {
   @ApiPropertyOptional({ description: 'Defaults to now' })
   @IsOptional()

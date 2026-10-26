@@ -53,15 +53,6 @@ export class CompositeItemsController {
     return this.compositeItems.findAll(caller, query);
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'One composite item' })
-  async findOne(
-    @UserEntity() caller: AuthenticatedUser,
-    @Param('id') id: string,
-  ) {
-    return this.compositeItems.findOne(caller, id);
-  }
-
   @Post()
   @ApiOperation({
     summary: 'Create a composite item',

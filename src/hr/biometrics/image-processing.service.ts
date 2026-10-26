@@ -14,21 +14,14 @@ import type { Sharp } from 'sharp';
 const sharp: (input?: Buffer) => Sharp = require('sharp');
 import type { WorkspaceConfig } from '../../common/configs/config.interface';
 
-/** Raw pixel data plus its dimensions — what tfjs needs to build a tensor. */
-export interface RawImage {
-  data: Buffer;
-  width: number;
-  height: number;
-  channels: number;
-}
-
 /**
  * Every transformation applied to a photo between upload and storage.
  *
- * Two jobs, one dependency (constitution v1.4.0). Decoding, because face-api runs
- * on the WASM backend and so has no native image decoder available to it. And
- * re-encoding, because a modern phone camera produces multi-megabyte images and
- * storing those verbatim is what turns a punch photo into a storage bill.
+ * Re-encoding, because a modern phone camera produces multi-megabyte images and
+ * storing those verbatim is what turns a punch photo into a storage bill. (Decoding
+ * for inference, this service's other job until 2026-10-26, moved into
+ * `face-inference.ts`, which runs on the inference worker where no Nest provider
+ * reaches — still through sharp, per constitution v1.4.0.)
  */
 @Injectable()
 export class ImageProcessingService {
@@ -36,26 +29,6 @@ export class ImageProcessingService {
 
   constructor(configService: ConfigService) {
     this.workspace = configService.get<WorkspaceConfig>('workspace');
-  }
-
-  /**
-   * Decodes to raw RGB pixels for inference.
-   *
-   * Three channels, not four: an alpha channel carries no information a face
-   * matcher uses, and passing RGBA where RGB is expected silently shifts every
-   * pixel's colour values.
-   */
-  async decodeToRaw(photo: Buffer): Promise<RawImage> {
-    const { data, info } = await sharp(photo)
-      .removeAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    return {
-      data,
-      width: info.width,
-      height: info.height,
-      channels: info.channels,
-    };
   }
 
   /** Compresses an enrolment photo — larger and cleaner, since descriptor quality

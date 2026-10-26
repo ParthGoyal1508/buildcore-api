@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { PurchaseStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
@@ -367,7 +368,12 @@ export class InventoryService implements OnModuleInit {
   } | null> {
     const purchase = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.purchase.findFirst({
-        where: { id: purchaseId, deleted: false },
+        where: {
+          id: purchaseId,
+          deleted: false,
+          // 043: a site entry waiting for Head Office has no vendor or amount to cite yet.
+          status: PurchaseStatus.completed,
+        },
         select: {
           id: true,
           companyId: true,

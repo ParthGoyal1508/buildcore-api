@@ -11,12 +11,15 @@ import {
   CodeSeriesType,
   Prisma,
   PurchaseBillStatus,
+  PurchaseSource,
+  PurchaseStatus,
   StockLedgerType,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
+import { actorNameOf, actorNamesFor } from '../../common/actor-name';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { detectContentType } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
@@ -52,10 +55,13 @@ import {
   hiddenCashPayment,
 } from '../payments/cash-hiding';
 import {
+  CompletePurchaseDto,
   CreatePurchaseDto,
+  GrnDetailsDto,
   ListPurchasesDto,
   UpdatePurchaseDto,
 } from './dto/purchase.dto';
+import { normaliseVehicleNo } from './vehicle-no';
 
 /** Where bill uploads are stored. */
 const BILL_NAMESPACE = 'purchase-bills';
@@ -72,12 +78,13 @@ export interface PurchaseView {
   itemName: string;
   itemCode: string;
   unit: string;
-  vendorId: string;
-  vendorName: string;
+  /** Null, with quantity, rate and amount, on a site entry Head Office has not completed (043). */
+  vendorId: string | null;
+  vendorName: string | null;
   date: Date;
-  quantity: number;
-  rate: number;
-  amount: number;
+  quantity: number | null;
+  rate: number | null;
+  amount: number | null;
   grnNumber: string | null;
   hasBillFile: boolean;
   paymentStatus: PurchaseBillStatus | null;
@@ -89,8 +96,26 @@ export interface PurchaseView {
   purchaseOrderLineNo: number | null;
   /** Whether a delivery photograph is stored (036 M11) — `GET :id/photo`. */
   hasPhoto: boolean;
+  /** How many delivery photos — `GET :id/photo?n=` serves each, from 1 (043: up to five). */
+  photoCount: number;
   remarks: string | null;
   createdAt: Date;
+  /** 043: a site entry waits as `partial_site` until Head Office completes it. */
+  status: PurchaseStatus;
+  source: PurchaseSource;
+  vehicleNo: string | null;
+  deliveredAt: Date | null;
+  /** Where the site's photo was taken, as the server accepted it; null for Head Office purchases. */
+  gps: {
+    latitude: number;
+    longitude: number;
+    accuracyMeters: number | null;
+    capturedAt: Date | null;
+    distanceMeters: number | null;
+  } | null;
+  createdByName: string | null;
+  completedByName: string | null;
+  completedAt: Date | null;
 }
 
 export interface PaginatedPurchases {
@@ -123,6 +148,91 @@ function poRefOf(purchase: {
     purchaseOrderLineNo: purchase.purchaseOrderLine?.lineNo ?? null,
   };
 }
+
+/** A purchase's delivery photos in the order taken — the first, then a site entry's others (043). */
+function photoRefsOf(purchase: {
+  photoFileRef: string | null;
+  extraPhotoFileRefs: string[];
+}): string[] {
+  return [
+    ...(purchase.photoFileRef ? [purchase.photoFileRef] : []),
+    // `?? []`: the column is nullable in SQL (Prisma lists are), though every row gets `{}`.
+    ...(purchase.extraPhotoFileRefs ?? []),
+  ];
+}
+
+/** The 043 fields every purchase view carries, with the creator and completer named. */
+function siteFieldsOf(
+  purchase: {
+    status: PurchaseStatus;
+    source: PurchaseSource;
+    vehicleNo: string | null;
+    deliveredAt: Date | null;
+    gpsLatitude: Prisma.Decimal | null;
+    gpsLongitude: Prisma.Decimal | null;
+    gpsAccuracyMeters: Prisma.Decimal | null;
+    gpsCapturedAt: Date | null;
+    geofenceDistanceMeters: Prisma.Decimal | null;
+    createdByUserId: string | null;
+    completedByUserId: string | null;
+    completedAt: Date | null;
+  },
+  names: Map<string, string>,
+): Pick<
+  PurchaseView,
+  | 'status'
+  | 'source'
+  | 'vehicleNo'
+  | 'deliveredAt'
+  | 'gps'
+  | 'createdByName'
+  | 'completedByName'
+  | 'completedAt'
+> {
+  const nameOf = (id: string | null) => (id ? names.get(id) ?? null : null);
+  return {
+    status: purchase.status,
+    source: purchase.source,
+    vehicleNo: purchase.vehicleNo,
+    deliveredAt: purchase.deliveredAt,
+    gps:
+      purchase.gpsLatitude && purchase.gpsLongitude
+        ? {
+            latitude: toNumber(purchase.gpsLatitude),
+            longitude: toNumber(purchase.gpsLongitude),
+            accuracyMeters: purchase.gpsAccuracyMeters
+              ? toNumber(purchase.gpsAccuracyMeters)
+              : null,
+            capturedAt: purchase.gpsCapturedAt,
+            distanceMeters: purchase.geofenceDistanceMeters
+              ? toNumber(purchase.geofenceDistanceMeters)
+              : null,
+          }
+        : null,
+    createdByName: nameOf(purchase.createdByUserId),
+    completedByName: nameOf(purchase.completedByUserId),
+    completedAt: purchase.completedAt,
+  };
+}
+
+/** What a purchase's stock, bill and GRN are computed from — the create form's, or a completion's. */
+interface ReceiptTerms {
+  companyId: string;
+  siteId: string;
+  itemId: string;
+  vendorId: string;
+  quantity: number;
+  rate: number;
+  amount: number;
+  date: Date;
+  indentLineId: string | null;
+  purchaseOrderLineId: string | null;
+}
+
+/** The GRN form's fields, with the vehicle number already normalised by the caller. */
+type GrnFields = Omit<GrnDetailsDto, 'vehicleNo'> & {
+  vehicleNo: string | null;
+};
 
 /**
  * Purchases: the only thing in this module that adds stock, and therefore the only
@@ -199,36 +309,24 @@ export class PurchasesService {
     // recomputing it on every read would let a rounding change restate history.
     const amount = Math.round(dto.quantity * dto.rate * 100) / 100;
 
+    const terms: ReceiptTerms = {
+      companyId: targetCompanyId,
+      siteId: dto.siteId,
+      itemId: dto.itemId,
+      vendorId: dto.vendorId,
+      quantity: dto.quantity,
+      rate: dto.rate,
+      amount,
+      date,
+      indentLineId: dto.indentLineId ?? null,
+      purchaseOrderLineId: dto.purchaseOrderLineId ?? null,
+    };
+
     const created = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
-        // 028 FR-012/FR-013, inside the transaction so a concurrent first purchase of the same pair
-        // cannot slip between the read and the write.
-        //
-        // A pair with an agreed rate must match it; a pair with none establishes one below. A known
-        // item from a vendor who has not supplied it before has no agreed rate, so it is a first
-        // purchase — the contract is per vendor.
-        const agreed = await this.rates.currentFor(
-          tx,
-          targetCompanyId,
-          dto.vendorId,
-          dto.itemId,
-        );
-        this.rates.assertMatchesAgreed(agreed, dto.rate);
-
-        // 036 M9: received against a PO line, the line caps it — same item, the PO's vendor, and
-        // no more than is left of what was ordered. Locked inside this transaction, so two
-        // deliveries racing for the last of a line cannot both pass.
-        if (dto.purchaseOrderLineId) {
-          await this.purchaseOrders.assertReceivable(tx, {
-            companyId: targetCompanyId,
-            purchaseOrderLineId: dto.purchaseOrderLineId,
-            itemId: dto.itemId,
-            vendorId: dto.vendorId,
-            quantity: dto.quantity,
-          });
-        }
+        const agreed = await this.assertReceivable(tx, terms);
 
         const purchase = await tx.purchase.create({
           data: {
@@ -245,90 +343,20 @@ export class PurchasesService {
             remarks: dto.remarks?.trim() || null,
             indentLineId: dto.indentLineId ?? null,
             purchaseOrderLineId: dto.purchaseOrderLineId ?? null,
+            createdByUserId: caller.id,
           },
           include: {
             purchaseOrderLine: { include: { purchaseOrder: true } },
           },
         });
 
-        // The first purchase of a pair is what establishes the agreed rate (FR-012). Recorded here
-        // rather than before the create, so the rate points at the purchase that set it — which is
-        // what makes FR-016's first-purchase report answerable without inferring it from dates.
-        if (!agreed) {
-          await this.rates.establish(tx, {
-            companyId: targetCompanyId,
-            vendorId: dto.vendorId,
-            itemId: dto.itemId,
-            rate: dto.rate,
-            effectiveFrom: date,
-            purchaseId: purchase.id,
-          });
-        }
-
-        await this.stock.appendLedgerEntry(tx, {
-          companyId: targetCompanyId,
-          itemId: dto.itemId,
-          siteId: dto.siteId,
-          type: StockLedgerType.purchase,
-          quantity: dto.quantity,
-          rate: dto.rate,
-          referenceId: purchase.id,
-          date,
-        });
-
-        await this.stock.upsertBalanceForPurchase(tx, {
-          companyId: targetCompanyId,
-          itemId: dto.itemId,
-          siteId: dto.siteId,
-          quantity: dto.quantity,
-          rate: dto.rate,
-        });
-
-        await tx.purchaseBill.create({
-          data: {
-            companyId: targetCompanyId,
-            purchaseId: purchase.id,
-            vendorId: dto.vendorId,
-            totalAmount: amount,
-            billDate: date,
-          },
-        });
-
-        // The GRN is created here, not by a later step, because FR-020 says "auto-
-        // generated on purchase save": a purchase that committed without one would
-        // be a receipt nobody can acknowledge.
-        const grnNumber = await this.codeSeries.next(
-          tx,
-          targetCompanyId,
-          CodeSeriesType.GRN,
-          GRN_CODE_INFIX,
-        );
-        await tx.goodsReceiptNote.create({
-          data: {
-            companyId: targetCompanyId,
-            purchaseId: purchase.id,
-            grnNumber,
-            siteId: dto.siteId,
-            challanNo: dto.grn?.challanNo?.trim() || null,
+        const grnNumber = await this.postReceipt(tx, purchase.id, terms, {
+          agreed,
+          grn: {
+            ...dto.grn,
             vehicleNo: dto.grn?.vehicleNo?.trim().toUpperCase() || null,
-            receivedQuantity: dto.grn?.receivedQuantity ?? null,
-            acceptedQuantity: dto.grn?.acceptedQuantity ?? null,
-            rejectedQuantity: dto.grn?.rejectedQuantity ?? null,
-            condition: dto.grn?.condition ?? null,
-            batchDetails: dto.grn?.batchDetails?.trim() || null,
-            discrepancy: dto.grn?.discrepancy?.trim() || null,
           },
         });
-
-        if (dto.indentLineId) {
-          await this.indentFulfilment.applyFulfilment(tx, {
-            companyId: targetCompanyId,
-            indentLineId: dto.indentLineId,
-            quantity: dto.quantity,
-            itemId: dto.itemId,
-            siteId: dto.siteId,
-          });
-        }
 
         return { purchase, grnNumber };
       },
@@ -382,14 +410,343 @@ export class PurchasesService {
       indentLineId: dto.indentLineId ?? null,
       ...poRefOf(created.purchase),
       hasPhoto: photoFileRef !== null,
+      photoCount: photoFileRef !== null ? 1 : 0,
       remarks: created.purchase.remarks,
       createdAt: created.purchase.createdAt,
+      ...siteFieldsOf(
+        created.purchase,
+        new Map([[caller.id, actorNameOf(caller)]]),
+      ),
     };
+  }
+
+  /**
+   * Head Office completing a site entry (043): the vendor, quantity, rate and bill are added, and
+   * only now does the delivery move stock — through exactly the steps `create` takes, so a completed
+   * site entry is indistinguishable from a purchase recorded at the office.
+   *
+   * The row is locked first. A second completion racing this one waits, then finds it completed and
+   * gets a 409; without the lock both would post the receipt and the stock would double.
+   */
+  async complete(
+    caller: AuthenticatedUser,
+    id: string,
+    dto: CompletePurchaseDto,
+    ipAddress: string,
+  ): Promise<PurchaseView> {
+    // Read outside the transaction only to resolve the company and validate references against it;
+    // the status is checked again under the lock.
+    const found = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) => tx.purchase.findUnique({ where: { id } }),
+    );
+    if (!found || found.deleted) {
+      throw new NotFoundException(`Purchase ${id} not found`);
+    }
+    assertInScope(caller, found, `Purchase ${id}`);
+    if (found.status !== PurchaseStatus.partial_site) {
+      throw new ConflictException('This purchase is already completed.');
+    }
+
+    const [item] = await Promise.all([
+      this.refs.requireItem(caller, dto.itemId, found.companyId),
+      this.refs.requireActiveVendor(caller, dto.vendorId, found.companyId),
+    ]);
+    if (!item.active) {
+      throw new BadRequestException(
+        `Item ${item.code} is retired and cannot be purchased.`,
+      );
+    }
+    const billFileRef = dto.billFile
+      ? await this.storeUpload(dto.billFile, BILL_TYPES, 'The bill')
+      : null;
+
+    const date = this.refs.parseDate(dto.date);
+    const amount = Math.round(dto.quantity * dto.rate * 100) / 100;
+    // A vehicle typed on the GRN corrects the site's; left blank, the site's stands.
+    const typedVehicleNo = dto.grn?.vehicleNo
+      ? normaliseVehicleNo(dto.grn.vehicleNo) || null
+      : null;
+    const terms: ReceiptTerms = {
+      companyId: found.companyId,
+      siteId: found.siteId,
+      itemId: dto.itemId,
+      vendorId: dto.vendorId,
+      quantity: dto.quantity,
+      rate: dto.rate,
+      amount,
+      date,
+      indentLineId: dto.indentLineId ?? null,
+      purchaseOrderLineId: dto.purchaseOrderLineId ?? null,
+    };
+
+    const completed = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "inventory"."Purchase" WHERE "id" = ${id} FOR UPDATE`;
+        const locked = await tx.purchase.findUnique({ where: { id } });
+        if (!locked || locked.deleted) {
+          throw new NotFoundException(`Purchase ${id} not found`);
+        }
+        if (locked.status !== PurchaseStatus.partial_site) {
+          throw new ConflictException('This purchase is already completed.');
+        }
+
+        const vehicleNo = typedVehicleNo ?? locked.vehicleNo;
+        const agreed = await this.assertReceivable(tx, terms);
+        const purchase = await tx.purchase.update({
+          where: { id },
+          data: {
+            status: PurchaseStatus.completed,
+            itemId: dto.itemId,
+            vendorId: dto.vendorId,
+            date,
+            quantity: dto.quantity,
+            rate: dto.rate,
+            amount,
+            vehicleNo,
+            ...(billFileRef ? { billFileRef } : {}),
+            remarks: dto.remarks?.trim() || locked.remarks,
+            indentLineId: dto.indentLineId ?? null,
+            purchaseOrderLineId: dto.purchaseOrderLineId ?? null,
+            completedByUserId: caller.id,
+            completedAt: new Date(),
+          },
+        });
+        const grnNumber = await this.postReceipt(tx, id, terms, {
+          agreed,
+          grn: { ...dto.grn, vehicleNo },
+        });
+        return { before: locked, purchase, grnNumber, vehicleNo };
+      },
+    );
+
+    // The site's item, date and vehicle as they were, beside what Head Office completed it with, so
+    // a correction made while completing is in the history like one made through `update`.
+    await this.auditLog.record({
+      entityType: AuditEntityType.PURCHASE,
+      action: AuditAction.UPDATE,
+      entityId: id,
+      changes: {
+        event: 'completed',
+        before: {
+          status: completed.before.status,
+          itemId: completed.before.itemId,
+          date: completed.before.date,
+          vehicleNo: completed.before.vehicleNo,
+        },
+        after: {
+          status: PurchaseStatus.completed,
+          itemId: dto.itemId,
+          date,
+          vehicleNo: completed.vehicleNo,
+          vendorId: dto.vendorId,
+          quantity: dto.quantity,
+          rate: dto.rate,
+          amount,
+        },
+      },
+      accountId: caller.id,
+      companyId: found.companyId,
+      ipAddress,
+    });
+    await this.auditLog.record({
+      entityType: AuditEntityType.GOODS_RECEIPT_NOTE,
+      action: AuditAction.CREATE,
+      entityId: id,
+      changes: { after: { grnNumber: completed.grnNumber } },
+      accountId: caller.id,
+      companyId: found.companyId,
+      ipAddress,
+    });
+
+    return this.viewOf(caller, id);
+  }
+
+  /**
+   * The checks a receipt must pass before its quantity is written (028 FR-012/FR-013, 036 M9).
+   * Before the row is written, not after: the PO line's remaining quantity is summed from the
+   * purchases already received against it, and this one must not count itself.
+   */
+  private async assertReceivable(
+    tx: Prisma.TransactionClient,
+    terms: ReceiptTerms,
+  ): Promise<{ rate: Prisma.Decimal } | null> {
+    // Inside the transaction so a concurrent first purchase of the same pair cannot slip between the
+    // read and the write. A pair with an agreed rate must match it; a pair with none establishes one
+    // in `postReceipt`. A known item from a vendor who has not supplied it before has no agreed
+    // rate, so it is a first purchase — the contract is per vendor.
+    const agreed = await this.rates.currentFor(
+      tx,
+      terms.companyId,
+      terms.vendorId,
+      terms.itemId,
+    );
+    this.rates.assertMatchesAgreed(agreed, terms.rate);
+
+    // Received against a PO line, the line caps it — same item, the PO's vendor, and no more than is
+    // left of what was ordered. Locked inside this transaction, so two deliveries racing for the last
+    // of a line cannot both pass.
+    if (terms.purchaseOrderLineId) {
+      await this.purchaseOrders.assertReceivable(tx, {
+        companyId: terms.companyId,
+        purchaseOrderLineId: terms.purchaseOrderLineId,
+        itemId: terms.itemId,
+        vendorId: terms.vendorId,
+        quantity: terms.quantity,
+      });
+    }
+    return agreed;
+  }
+
+  /**
+   * Everything a received purchase moves, in the caller's transaction: the agreed rate on a first
+   * purchase, the ledger entry and stock balance, the unpaid bill, the GRN and the indent line.
+   * Returns the GRN number.
+   */
+  private async postReceipt(
+    tx: Prisma.TransactionClient,
+    purchaseId: string,
+    terms: ReceiptTerms,
+    options: { agreed: { rate: Prisma.Decimal } | null; grn: GrnFields },
+  ): Promise<string> {
+    // The first purchase of a pair is what establishes the agreed rate (FR-012). Recorded after the
+    // row exists, so the rate points at the purchase that set it — which is what makes FR-016's
+    // first-purchase report answerable without inferring it from dates.
+    if (!options.agreed) {
+      await this.rates.establish(tx, {
+        companyId: terms.companyId,
+        vendorId: terms.vendorId,
+        itemId: terms.itemId,
+        rate: terms.rate,
+        effectiveFrom: terms.date,
+        purchaseId,
+      });
+    }
+
+    await this.stock.appendLedgerEntry(tx, {
+      companyId: terms.companyId,
+      itemId: terms.itemId,
+      siteId: terms.siteId,
+      type: StockLedgerType.purchase,
+      quantity: terms.quantity,
+      rate: terms.rate,
+      referenceId: purchaseId,
+      date: terms.date,
+    });
+
+    await this.stock.upsertBalanceForPurchase(tx, {
+      companyId: terms.companyId,
+      itemId: terms.itemId,
+      siteId: terms.siteId,
+      quantity: terms.quantity,
+      rate: terms.rate,
+    });
+
+    await tx.purchaseBill.create({
+      data: {
+        companyId: terms.companyId,
+        purchaseId,
+        vendorId: terms.vendorId,
+        totalAmount: terms.amount,
+        billDate: terms.date,
+      },
+    });
+
+    // The GRN is created here, not by a later step, because FR-020 says "auto-generated on purchase
+    // save": a purchase that committed without one would be a receipt nobody can acknowledge.
+    const grnNumber = await this.codeSeries.next(
+      tx,
+      terms.companyId,
+      CodeSeriesType.GRN,
+      GRN_CODE_INFIX,
+    );
+    const grn = options.grn;
+    await tx.goodsReceiptNote.create({
+      data: {
+        companyId: terms.companyId,
+        purchaseId,
+        grnNumber,
+        siteId: terms.siteId,
+        challanNo: grn.challanNo?.trim() || null,
+        vehicleNo: grn.vehicleNo,
+        receivedQuantity: grn.receivedQuantity ?? null,
+        acceptedQuantity: grn.acceptedQuantity ?? null,
+        rejectedQuantity: grn.rejectedQuantity ?? null,
+        condition: grn.condition ?? null,
+        batchDetails: grn.batchDetails?.trim() || null,
+        discrepancy: grn.discrepancy?.trim() || null,
+      },
+    });
+
+    if (terms.indentLineId) {
+      await this.indentFulfilment.applyFulfilment(tx, {
+        companyId: terms.companyId,
+        indentLineId: terms.indentLineId,
+        quantity: terms.quantity,
+        itemId: terms.itemId,
+        siteId: terms.siteId,
+      });
+    }
+    return grnNumber;
+  }
+
+  /**
+   * A purchase's change history, oldest first (043): created, every correction with what each field
+   * was and became, and the completion. Read from the activity log, which is where it is kept.
+   */
+  async history(
+    caller: AuthenticatedUser,
+    id: string,
+  ): Promise<
+    {
+      action: AuditAction;
+      at: Date;
+      byName: string | null;
+      changes: Prisma.JsonValue;
+    }[]
+  > {
+    const purchase = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) => tx.purchase.findUnique({ where: { id } }),
+    );
+    if (!purchase) throw new NotFoundException(`Purchase ${id} not found`);
+    assertInScope(caller, purchase, `Purchase ${id}`);
+
+    const entries = await this.auditLog.listForEntity(
+      AuditEntityType.PURCHASE,
+      id,
+    );
+    const names = await actorNamesFor(
+      this.prisma,
+      entries.map((entry) => entry.accountId),
+    );
+    return entries.map((entry) => ({
+      action: entry.action,
+      at: entry.createdAt,
+      byName: entry.accountId ? names.get(entry.accountId) ?? null : null,
+      changes: entry.changes,
+    }));
+  }
+
+  /** One purchase as the list shows it — what `complete` and `update` hand back. */
+  private async viewOf(
+    caller: AuthenticatedUser,
+    id: string,
+  ): Promise<PurchaseView> {
+    const page = await this.findAll(caller, {}, { id });
+    const view = page.purchases[0];
+    if (!view) throw new NotFoundException(`Purchase ${id} not found`);
+    return view;
   }
 
   async findAll(
     caller: AuthenticatedUser,
     query: ListPurchasesDto,
+    only?: { id: string },
   ): Promise<PaginatedPurchases> {
     const page = Math.max(1, query.page ?? 1);
     const pageSize = Math.min(
@@ -403,6 +760,9 @@ export class PurchasesService {
       // Soft-deleted purchases are absent from every list. They exist so the ledger
       // reversal has something to point at, not so they can be browsed.
       deleted: false,
+      ...(only ? { id: only.id } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.source ? { source: query.source } : {}),
       ...(query.siteId ? { siteId: query.siteId } : {}),
       ...(query.vendorId ? { vendorId: query.vendorId } : {}),
       ...(query.itemId ? { itemId: query.itemId } : {}),
@@ -492,7 +852,7 @@ export class PurchasesService {
       },
     );
 
-    const [items, siteNames, vendorNames] = await Promise.all([
+    const [items, siteNames, vendorNames, people] = await Promise.all([
       this.refs.itemsByIds(
         caller,
         rows.map((row) => row.itemId),
@@ -503,7 +863,11 @@ export class PurchasesService {
       ),
       this.refs.vendorNames(
         caller,
-        rows.map((row) => row.vendorId),
+        rows.flatMap((row) => (row.vendorId ? [row.vendorId] : [])),
+      ),
+      actorNamesFor(
+        this.prisma,
+        rows.flatMap((row) => [row.createdByUserId, row.completedByUserId]),
       ),
     ]);
 
@@ -520,11 +884,13 @@ export class PurchasesService {
           itemCode: item?.code ?? '',
           unit: item?.unit ?? '',
           vendorId: row.vendorId,
-          vendorName: vendorNames.get(row.vendorId) ?? 'Unknown vendor',
+          vendorName: row.vendorId
+            ? vendorNames.get(row.vendorId) ?? 'Unknown vendor'
+            : null,
           date: row.date,
-          quantity: toNumber(row.quantity),
-          rate: toNumber(row.rate),
-          amount: toNumber(row.amount),
+          quantity: row.quantity === null ? null : toNumber(row.quantity),
+          rate: row.rate === null ? null : toNumber(row.rate),
+          amount: row.amount === null ? null : toNumber(row.amount),
           grnNumber: row.grn?.grnNumber ?? null,
           hasBillFile: row.billFileRef !== null,
           paymentStatus: row.bill?.paymentStatus ?? null,
@@ -532,8 +898,10 @@ export class PurchasesService {
           indentLineId: row.indentLineId,
           ...poRefOf(row),
           hasPhoto: row.photoFileRef !== null,
+          photoCount: photoRefsOf(row).length,
           remarks: row.remarks,
           createdAt: row.createdAt,
+          ...siteFieldsOf(row, people),
         };
       }),
       totals: {
@@ -562,14 +930,17 @@ export class PurchasesService {
   async getPhotoFile(
     caller: AuthenticatedUser,
     id: string,
+    /** Which photo, from 1 — a site entry may carry up to five (043). */
+    n = 1,
   ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
-    return this.storedFile(caller, id, 'photo');
+    return this.storedFile(caller, id, 'photo', n);
   }
 
   private async storedFile(
     caller: AuthenticatedUser,
     id: string,
     which: 'bill' | 'photo',
+    n = 1,
   ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
     const purchase = await withRlsContext(
       this.prisma,
@@ -580,7 +951,10 @@ export class PurchasesService {
       throw new NotFoundException(`Purchase ${id} not found`);
     }
     assertInScope(caller, purchase, `Purchase ${id}`);
-    const ref = which === 'bill' ? purchase.billFileRef : purchase.photoFileRef;
+    const ref =
+      which === 'bill'
+        ? purchase.billFileRef
+        : photoRefsOf(purchase)[n - 1] ?? null;
     if (!ref) {
       throw new NotFoundException(
         which === 'bill'
@@ -600,7 +974,7 @@ export class PurchasesService {
   }
 
   /** Decode, check, compress and store one upload; returns its storage ref (036 B4-B6). */
-  private async storeUpload(
+  async storeUpload(
     payload: string,
     allowed: readonly string[],
     label: string,
@@ -621,6 +995,14 @@ export class PurchasesService {
     dto: UpdatePurchaseDto,
     ipAddress: string,
   ): Promise<PurchaseView> {
+    const vehicleNo =
+      dto.vehicleNo === undefined
+        ? undefined
+        : normaliseVehicleNo(dto.vehicleNo);
+    if (vehicleNo === '') {
+      throw new BadRequestException('Enter the vehicle number.');
+    }
+
     const updated = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -630,6 +1012,28 @@ export class PurchasesService {
           throw new NotFoundException(`Purchase ${id} not found`);
         }
         assertInScope(caller, existing, `Purchase ${id}`);
+
+        // 043: a site entry has moved no stock yet, so its item and vehicle are still the site's
+        // guesses to correct. Once completed, the item is what the ledger was computed from.
+        const partial = existing.status === PurchaseStatus.partial_site;
+        if (!partial && (dto.itemId !== undefined || vehicleNo !== undefined)) {
+          throw new BadRequestException(
+            'Only a site entry waiting for Head Office can have its item or vehicle number changed. ' +
+              'Correcting a completed purchase is delete plus re-create.',
+          );
+        }
+        if (dto.itemId !== undefined && dto.itemId !== existing.itemId) {
+          const item = await this.refs.requireItem(
+            caller,
+            dto.itemId,
+            existing.companyId,
+          );
+          if (!item.active) {
+            throw new BadRequestException(
+              `Item ${item.code} is retired and cannot be purchased.`,
+            );
+          }
+        }
 
         // No rate check here, and that is not an omission (028 FR-013).
         //
@@ -666,65 +1070,44 @@ export class PurchasesService {
             ...(dto.remarks !== undefined
               ? { remarks: dto.remarks?.trim() || null }
               : {}),
-          },
-          include: {
-            bill: true,
-            grn: true,
-            purchaseOrderLine: { include: { purchaseOrder: true } },
+            ...(dto.itemId !== undefined ? { itemId: dto.itemId } : {}),
+            ...(vehicleNo !== undefined ? { vehicleNo } : {}),
           },
         });
-        // 038: the paid figure handed back reads without hidden cash, as the list does.
-        if (!saved.bill) return saved;
-        const cash = await hiddenCashByBillTx(
-          tx,
-          [saved.bill.id],
-          await cashHiddenCompaniesTx(tx, { companyId: saved.companyId }),
-        );
-        return { ...saved, bill: billWithoutHiddenCash(saved.bill, cash) };
+        return { before: existing, saved };
       },
     );
 
+    // The change history (043): what each changed field was and became, so a correction to what the
+    // site recorded can be read back against what it originally said.
+    const fields = ['date', 'remarks', 'itemId', 'vehicleNo'] as const;
+    const changed = fields.filter(
+      (field) => String(updated.before[field]) !== String(updated.saved[field]),
+    );
     await this.auditLog.record({
       entityType: AuditEntityType.PURCHASE,
       action: AuditAction.UPDATE,
       entityId: id,
-      changes: { after: { date: updated.date, remarks: updated.remarks } },
+      changes: {
+        before: Object.fromEntries(
+          changed.map((field) => [field, updated.before[field]]),
+        ),
+        after: {
+          date: updated.saved.date,
+          remarks: updated.saved.remarks,
+          ...Object.fromEntries(
+            changed.map((field) => [field, updated.saved[field]]),
+          ),
+        },
+      },
       accountId: caller.id,
-      companyId: updated.companyId,
+      companyId: updated.saved.companyId,
       ipAddress,
     });
 
-    const [item, siteName, vendorName] = await Promise.all([
-      this.refs.requireItem(caller, updated.itemId, updated.companyId),
-      this.refs.requireSiteName(caller, updated.siteId, updated.companyId),
-      this.refs.requireVendorName(caller, updated.vendorId),
-    ]);
-
-    return {
-      id: updated.id,
-      companyId: updated.companyId,
-      siteId: updated.siteId,
-      siteName,
-      itemId: updated.itemId,
-      itemName: item.name,
-      itemCode: item.code,
-      unit: item.unit,
-      vendorId: updated.vendorId,
-      vendorName,
-      date: updated.date,
-      quantity: toNumber(updated.quantity),
-      rate: toNumber(updated.rate),
-      amount: toNumber(updated.amount),
-      grnNumber: updated.grn?.grnNumber ?? null,
-      hasBillFile: updated.billFileRef !== null,
-      paymentStatus: updated.bill?.paymentStatus ?? null,
-      paidAmount: updated.bill ? toNumber(updated.bill.paidAmount) : 0,
-      indentLineId: updated.indentLineId,
-      ...poRefOf(updated),
-      hasPhoto: updated.photoFileRef !== null,
-      remarks: updated.remarks,
-      createdAt: updated.createdAt,
-    };
+    // 038: the paid figure handed back reads without hidden cash, as the list does — the list is
+    // what builds it.
+    return this.viewOf(caller, id);
   }
 
   /**
@@ -752,6 +1135,19 @@ export class PurchasesService {
           throw new NotFoundException(`Purchase ${id} not found`);
         }
         assertInScope(caller, existing, `Purchase ${id}`);
+
+        // 043: a site entry Head Office has not completed moved nothing — no ledger entry, balance,
+        // bill or GRN — so deleting it is only the mark. Conditional for the same reason as below.
+        if (existing.status === PurchaseStatus.partial_site) {
+          const marked = await tx.purchase.updateMany({
+            where: { id, deleted: false, status: PurchaseStatus.partial_site },
+            data: { deleted: true, deletedAt: new Date() },
+          });
+          if (marked.count === 0) {
+            throw new NotFoundException(`Purchase ${id} not found`);
+          }
+          return existing;
+        }
 
         if (existing.bill && existing.bill.allocations.length > 0) {
           // 038: a bill paid in hidden cash would answer "delete the payment" about a payment the
@@ -813,7 +1209,7 @@ export class PurchasesService {
 
         await tx.stockBalance.updateMany({
           where: { itemId: existing.itemId, siteId: existing.siteId },
-          data: { received: { decrement: existing.quantity } },
+          data: { received: { decrement: quantity } },
         });
 
         // After the balance moves, not before: the replay reads the ledger and
@@ -858,10 +1254,9 @@ export class PurchasesService {
     // turn a completed delete into an error. The bill is kept, deliberately: it is the vendor's
     // document of a transaction that happened and was then reversed, and the soft-deleted row
     // still points at it for whoever audits the reversal.
-    if (removed.photoFileRef) {
-      await this.storage
-        .deleteMany([removed.photoFileRef])
-        .catch(() => undefined);
+    const photos = photoRefsOf(removed);
+    if (photos.length > 0) {
+      await this.storage.deleteMany(photos).catch(() => undefined);
     }
   }
 
@@ -884,6 +1279,7 @@ export class PurchasesService {
             companyId,
             siteId: { in: siteIds },
             deleted: false,
+            status: PurchaseStatus.completed,
             date: { gte: range.from, lte: range.to },
           },
           _sum: { amount: true },
@@ -920,6 +1316,7 @@ export class PurchasesService {
           where: {
             ...companyScope(caller, companyId),
             deleted: false,
+            status: PurchaseStatus.completed,
             date: { gte: month.from, lte: month.to },
           },
           _sum: { amount: true },

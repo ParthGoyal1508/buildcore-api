@@ -53,7 +53,6 @@ function build(kind: { key: string; label: string; companyId: string | null }) {
     prisma as any,
     { record: jest.fn() } as any,
     fields as any,
-    {} as any,
   );
   return { service, tx };
 }

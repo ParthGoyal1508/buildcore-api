@@ -34,6 +34,15 @@ const chainRow = (levels: ReturnType<typeof level>[]) => ({
 
 const auditMock = () => ({ record: jest.fn().mockResolvedValue(undefined) });
 
+/**
+ * The spine's one window onto `settings.Role` (042): which company a role belongs to.
+ * Defaults to a global role so every mapping test not about the foreign-role refusal
+ * keeps exercising what it was written for; `null` means no such role at all.
+ */
+const usersMock = (role: { companyId: string | null } | null = { companyId: null }) => ({
+  roleCompanyOf: jest.fn().mockResolvedValue(role),
+});
+
 describe('ChainsService', () => {
   describe('chain definition (FR-001)', () => {
     it('refuses a chain whose positions have a gap', async () => {
@@ -41,7 +50,7 @@ describe('ChainsService', () => {
         approvalChain: { findFirst: jest.fn(), create: jest.fn() },
       });
       const audit = auditMock();
-      const service = new ChainsService(prisma as never, audit as never);
+      const service = new ChainsService(prisma as never, audit as never, usersMock() as never);
 
       // 1, 2, 4 — the missing 3 would park every item there forever, because
       // `currentPosition` only ever advances by one.
@@ -68,7 +77,7 @@ describe('ChainsService', () => {
       const prisma = createPrismaMock({
         approvalChain: { findFirst: jest.fn(), create: jest.fn() },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       await expect(
         service.upsertChain(
@@ -90,7 +99,7 @@ describe('ChainsService', () => {
       const prisma = createPrismaMock({
         approvalChain: { findFirst: jest.fn(), create: jest.fn() },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       await expect(
         service.upsertChain(
@@ -112,7 +121,7 @@ describe('ChainsService', () => {
       const prisma = createPrismaMock({
         approvalChain: { findFirst: jest.fn(), create: jest.fn() },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       // The worst version of the failure: the chain completes with every level approved
       // and no director having seen it, and nothing looks wrong.
@@ -134,7 +143,7 @@ describe('ChainsService', () => {
       const prisma = createPrismaMock({
         approvalChain: { findFirst: jest.fn(), create: jest.fn() },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       // A level below the director would decide after the final word had been given,
       // which is not what "final" means.
@@ -164,7 +173,7 @@ describe('ChainsService', () => {
         },
         roleSlotMapping: { findMany: jest.fn().mockResolvedValue([]) },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       await expect(
         service.upsertChain(
@@ -198,7 +207,7 @@ describe('ChainsService', () => {
         roleSlotMapping: { findMany: jest.fn().mockResolvedValue([]) },
       });
       const audit = auditMock();
-      const service = new ChainsService(prisma as never, audit as never);
+      const service = new ChainsService(prisma as never, audit as never, usersMock() as never);
 
       await service.upsertChain(
         CTX,
@@ -247,7 +256,7 @@ describe('ChainsService', () => {
         },
       });
       const audit = auditMock();
-      const service = new ChainsService(prisma as never, audit as never);
+      const service = new ChainsService(prisma as never, audit as never, usersMock() as never);
 
       await service.putSlotMapping(
         CTX,
@@ -280,7 +289,7 @@ describe('ChainsService', () => {
         roleSlotMapping: { findMany: jest.fn().mockResolvedValue([]) },
       });
       const audit = auditMock();
-      const service = new ChainsService(prisma as never, audit as never);
+      const service = new ChainsService(prisma as never, audit as never, usersMock() as never);
 
       await service.upsertChain(
         CTX,
@@ -309,7 +318,7 @@ describe('ChainsService', () => {
         roleSlotMapping: { findMany: jest.fn().mockResolvedValue([]) },
       });
       const audit = auditMock();
-      const service = new ChainsService(prisma as never, audit as never);
+      const service = new ChainsService(prisma as never, audit as never, usersMock() as never);
 
       await service.upsertChain(
         CTX,
@@ -342,7 +351,7 @@ describe('ChainsService', () => {
         },
       });
       const audit = auditMock();
-      const service = new ChainsService(prisma as never, audit as never);
+      const service = new ChainsService(prisma as never, audit as never, usersMock() as never);
 
       await service.deactivateChain(CTX, 'chain-1', ACTOR);
 
@@ -384,7 +393,7 @@ describe('ChainsService', () => {
           upsert: jest.fn(),
         },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       // Binding `hr` to the same role would leave level 2 decidable only by somebody who
       // already decided at level 1 — which FR-021a forbids. Nothing would error; payroll
@@ -436,7 +445,7 @@ describe('ChainsService', () => {
           upsert: jest.fn(),
         },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       await expect(
         service.putSlotMapping(
@@ -472,7 +481,7 @@ describe('ChainsService', () => {
         },
       });
       const audit = auditMock();
-      const service = new ChainsService(prisma as never, audit as never);
+      const service = new ChainsService(prisma as never, audit as never, usersMock() as never);
 
       await expect(
         service.putSlotMapping(
@@ -485,6 +494,94 @@ describe('ChainsService', () => {
       expect(audit.record).toHaveBeenCalledWith(
         expect.objectContaining({ entityType: 'APPROVAL_CHAIN_CONFIG' }),
       );
+    });
+
+    it("refuses another company's role (042)", async () => {
+      // Unchecked, a SETTINGS holder could bind this company's approval slot to a role
+      // defined in another company — handing that company's accounts the right to
+      // approve items here. The refusal matches the one role assignment makes.
+      const prisma = createPrismaMock({
+        approvalChain: { findMany: jest.fn().mockResolvedValue([]) },
+        roleSlotMapping: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+          upsert: jest.fn(),
+        },
+      });
+      const users = usersMock({ companyId: 'company-2' });
+      const service = new ChainsService(
+        prisma as never,
+        auditMock() as never,
+        users as never,
+      );
+
+      const attempt = service.putSlotMapping(
+        CTX,
+        { companyId: COMPANY, slotKey: SLOT_HR, roleId: 'role-foreign' },
+        ACTOR,
+      );
+
+      await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+      await expect(attempt).rejects.toMatchObject({
+        response: { code: 'ROLE_OF_ANOTHER_COMPANY' },
+      });
+      expect(users.roleCompanyOf).toHaveBeenCalledWith('role-foreign');
+      // And nothing was written.
+      expect(prisma.tx.roleSlotMapping.upsert).not.toHaveBeenCalled();
+    });
+
+    it('refuses a role that does not exist at all (042)', async () => {
+      const prisma = createPrismaMock({
+        approvalChain: { findMany: jest.fn().mockResolvedValue([]) },
+        roleSlotMapping: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+          upsert: jest.fn(),
+        },
+      });
+      const service = new ChainsService(
+        prisma as never,
+        auditMock() as never,
+        usersMock(null) as never,
+      );
+
+      await expect(
+        service.putSlotMapping(
+          CTX,
+          { companyId: COMPANY, slotKey: SLOT_HR, roleId: 'role-gone' },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/does not exist/);
+      expect(prisma.tx.roleSlotMapping.upsert).not.toHaveBeenCalled();
+    });
+
+    it("accepts the company's own role (042)", async () => {
+      const prisma = createPrismaMock({
+        approvalChain: { findMany: jest.fn().mockResolvedValue([]) },
+        roleSlotMapping: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+          upsert: jest.fn().mockResolvedValue({
+            id: 'm-own',
+            companyId: COMPANY,
+            slotKey: SLOT_HR,
+            roleId: 'role-own',
+          }),
+        },
+      });
+      const service = new ChainsService(
+        prisma as never,
+        auditMock() as never,
+        usersMock({ companyId: COMPANY }) as never,
+      );
+
+      await expect(
+        service.putSlotMapping(
+          CTX,
+          { companyId: COMPANY, slotKey: SLOT_HR, roleId: 'role-own' },
+          ACTOR,
+        ),
+      ).resolves.toMatchObject({ roleId: 'role-own' });
     });
 
     it('permits two levels on the same role when the chain is inactive', async () => {
@@ -511,7 +608,7 @@ describe('ChainsService', () => {
           }),
         },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       await expect(
         service.putSlotMapping(
@@ -553,6 +650,7 @@ describe('ChainsService', () => {
       const service = new ChainsService(
         createPrismaMock() as never,
         auditMock() as never,
+        usersMock() as never,
       );
 
       await service.seedDefaultsForCompany(COMPANY, tx as never, {
@@ -592,6 +690,7 @@ describe('ChainsService', () => {
       const service = new ChainsService(
         createPrismaMock() as never,
         auditMock() as never,
+        usersMock() as never,
       );
 
       await service.seedDefaultsForCompany(COMPANY, tx as never, {
@@ -614,6 +713,7 @@ describe('ChainsService', () => {
       const service = new ChainsService(
         createPrismaMock() as never,
         auditMock() as never,
+        usersMock() as never,
       );
 
       // What the caller passes when a default role has been renamed or deleted.
@@ -644,6 +744,7 @@ describe('ChainsService', () => {
       const service = new ChainsService(
         createPrismaMock() as never,
         auditMock() as never,
+        usersMock() as never,
       );
 
       await service.seedDefaultsForCompany(COMPANY, tx as never, {});
@@ -662,6 +763,7 @@ describe('ChainsService', () => {
       const service = new ChainsService(
         createPrismaMock() as never,
         auditMock() as never,
+        usersMock() as never,
       );
 
       await service.seedDefaultsForCompany(COMPANY, tx as never, {
@@ -710,6 +812,7 @@ describe('ChainsService', () => {
       const service = new ChainsService(
         createPrismaMock() as never,
         auditMock() as never,
+        usersMock() as never,
       );
 
       await service.seedDefaultsForCompany(COMPANY, tx as never, {
@@ -724,7 +827,7 @@ describe('ChainsService', () => {
       const prisma = createPrismaMock({
         roleSlotMapping: { findUnique: jest.fn().mockResolvedValue(null) },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       await expect(
         service.resolveSlot(CTX, COMPANY, SLOT_HR),
@@ -737,7 +840,7 @@ describe('ChainsService', () => {
           findUnique: jest.fn().mockResolvedValue({ roleId: 'role-hr' }),
         },
       });
-      const service = new ChainsService(prisma as never, auditMock() as never);
+      const service = new ChainsService(prisma as never, auditMock() as never, usersMock() as never);
 
       await expect(service.resolveSlot(CTX, COMPANY, SLOT_HR)).resolves.toBe(
         'role-hr',

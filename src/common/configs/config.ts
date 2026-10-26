@@ -300,32 +300,21 @@ const config: Config = {
       50,
     ),
     faceMatch: {
-      // face-api's own documented default, and the threshold its published accuracy
-      // numbers are quoted at (research.md §2). Env-overridable because the right
-      // strictness is a field-tuning question, not a code question — a site with
-      // harsh outdoor lighting may need it loosened, and that must not need a deploy.
+      // OpenCV's published SFace match line (0.363 cosine similarity) as a distance.
+      // A new variable rather than the face-api one: that held a Euclidean distance,
+      // and a leftover 0.6 read as a cosine distance would quietly change strictness.
+      // Env-overridable because the right strictness is a field-tuning question, not a
+      // code question — a site with harsh outdoor lighting may need it loosened, and
+      // that must not need a deploy.
       distanceThreshold: numberFromEnv(
-        process.env.WORKSPACE_FACE_MATCH_DISTANCE_THRESHOLD,
-        0.6,
+        process.env.WORKSPACE_FACE_MATCH_MAX_COSINE_DISTANCE,
+        0.637,
       ),
-      // Swapped from `ssdMobilenetv1` to `tinyFaceDetector` on 2026-09-17 after
-      // measuring both. The number that decided it is not inference time but
-      // event-loop blocking: tfjs-wasm runs on the main thread, so while a punch is
-      // verified this process answers nothing else. `ssd` blocked for 228ms per
-      // punch against `tiny`'s 35ms — roughly 34 seconds of aggregate stall for a
-      // 150-punch burst versus five. Process RSS also fell 399 MB → 239 MB, which is
-      // the difference between fitting a 512 MB instance and not.
-      //
-      // Only the detector changed. Landmarks and the descriptor net are untouched,
-      // so this cannot produce a false match — it can only fail to find a face, and
-      // under 020 FR-013 that costs the worker a day. Overridable in both directions
-      // for exactly that reason.
-      detector: (process.env.WORKSPACE_FACE_DETECTOR === 'ssd'
-        ? 'ssd'
-        : 'tiny') as 'tiny' | 'ssd',
-      tinyInputSize: numberFromEnv(
-        process.env.WORKSPACE_FACE_TINY_INPUT_SIZE,
-        320,
+      // See the interface: inference is off the event loop regardless; this bounds
+      // how much CPU it takes from everything else.
+      inferenceThreads: numberFromEnv(
+        process.env.WORKSPACE_FACE_INFERENCE_THREADS,
+        2,
       ),
       // On by default: the instance is long-lived now that it does not suspend, so
       // the model load belongs at boot where nobody is waiting on it. It also makes

@@ -40,6 +40,9 @@ import {
 } from './labour-day.util';
 import { labourPunchRefused } from './labour-punch-refusal';
 
+/** 5,000 templates × 512 bytes: every worker of a large company, in ~2.5 MB. */
+const TEMPLATE_CACHE_SIZE = 5_000;
+
 export interface LabourDayRow {
   workerId: string;
   labourCode: string;
@@ -99,6 +102,31 @@ export class LabourPunchService {
     private readonly supervisorSites: SupervisorSiteService,
     private readonly days: LabourDayService,
   ) {}
+
+  /**
+   * Registered face templates by storage ref, so a punch does not fetch and decrypt the same blob
+   * from object storage every time (044) — that round trip was the slowest step left in a punch.
+   *
+   * Safe to cache without invalidation because a ref never changes what it points at: retaking a
+   * worker's photos stores a new blob under a new ref and deletes the old one, so a stale entry is
+   * simply never asked for again. Bounded, oldest out first, so a process that sees every worker
+   * in the company still holds at most ~2.5 MB.
+   */
+  private readonly templates = new Map<string, Float32Array>();
+
+  private async enrolledTemplate(ref: string): Promise<Float32Array> {
+    const cached = this.templates.get(ref);
+    if (cached) return cached;
+    const template = this.biometrics.deserializeDescriptor(
+      await this.storage.get(ref),
+    );
+    if (this.templates.size >= TEMPLATE_CACHE_SIZE) {
+      const [oldest] = this.templates.keys();
+      this.templates.delete(oldest);
+    }
+    this.templates.set(ref, template);
+    return template;
+  }
 
   /** Every active labour at the site with today's punches, for the supervisor's list. */
   async today(
@@ -266,16 +294,28 @@ export class LabourPunchService {
     );
     const punchDate = parseDateOnly(date);
 
+    // The location lookups, the face, the photo's compression and the day rules depend on none of
+    // each other, so they run together (044): the punch waits for the slowest rather than their
+    // sum. The face is computed from the photo as uploaded, not the compressed copy — the matcher
+    // downscales on its own, and waiting for the re-encode only delayed it. The checks below still
+    // run in the order they always have; only the waiting overlaps.
+    const photo = decodePhotoPayload(dto.photo, 'Labour photo');
+    const [geofence, accuracyMax, compressed, stored, candidate, rules] =
+      await Promise.all([
+        this.refs.getSiteGeofence(caller, dto.siteId),
+        this.refs.getPunchAccuracyMaxMetres(worker.companyId),
+        this.images.compressPunchPhoto(photo),
+        this.enrolledTemplate(worker.faceEnrolmentId),
+        this.biometrics.computeDescriptor([photo]).catch(() => null),
+        this.refs.getDayRules(worker.companyId),
+      ]);
+
     // --- Location: the employee rule (020 FR-011 to FR-013). ---
-    const geofence = await this.refs.getSiteGeofence(caller, dto.siteId);
     if (!geofence.isActive) {
       throw new BadRequestException(
         'This site is no longer in service, so attendance cannot be marked here.',
       );
     }
-    const accuracyMax = await this.refs.getPunchAccuracyMaxMetres(
-      worker.companyId,
-    );
     const unlocatable =
       dto.accuracyMeters !== undefined && dto.accuracyMeters > accuracyMax;
     const { withinGeofence, distanceMeters } = checkGeofence(
@@ -293,15 +333,6 @@ export class LabourPunchService {
       : null;
 
     // --- Face: always refuses on failure (031). ---
-    const compressed = await this.images.compressPunchPhoto(
-      decodePhotoPayload(dto.photo, 'Labour photo'),
-    );
-    const stored = this.biometrics.deserializeDescriptor(
-      await this.storage.get(worker.faceEnrolmentId),
-    );
-    const candidate = await this.biometrics
-      .computeDescriptor([compressed])
-      .catch(() => null);
     const match = candidate
       ? this.biometrics.compareDescriptors(candidate, stored)
       : null;
@@ -345,7 +376,6 @@ export class LabourPunchService {
       'image/jpeg',
     );
     const geofenceViolation = locationReason !== null;
-    const rules = await this.refs.getDayRules(worker.companyId);
     let day!: LabourDay;
 
     try {

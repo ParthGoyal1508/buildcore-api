@@ -62,6 +62,35 @@ export class AuditLogService {
     );
   }
 
+  /**
+   * One record's history, oldest first (043: a site purchase entry's corrections, shown beside it).
+   * The caller has already checked the record is in the caller's scope; this reads only its entries.
+   */
+  async listForEntity(
+    entityType: AuditEntityType,
+    entityId: string,
+  ): Promise<
+    {
+      action: AuditAction;
+      changes: Prisma.JsonValue;
+      accountId: string | null;
+      createdAt: Date;
+    }[]
+  > {
+    return withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.auditLogEntry.findMany({
+        where: { entityType, entityId },
+        select: {
+          action: true,
+          changes: true,
+          accountId: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+    );
+  }
+
   /** Convenience wrapper for feature 001's login-lifecycle events, where the event
    * name serves as both `entityType` and `action`. */
   async recordAuthEvent(

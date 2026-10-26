@@ -1,12 +1,14 @@
 import {
   Body,
   Controller,
+  DefaultValuePipe,
   Delete,
   Get,
   HttpCode,
   HttpStatus,
   Ip,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Query,
@@ -22,6 +24,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import {
+  CompletePurchaseDto,
   CreatePurchaseDto,
   ListPurchasesDto,
   UpdatePurchaseDto,
@@ -81,16 +84,49 @@ export class PurchasesController {
   @Get(':id/photo')
   @ApiOperation({
     summary: 'The delivery photograph taken at the gate (036 M11)',
+    description:
+      "`n` picks which, from 1 (default) to the purchase's `photoCount` — a site entry may carry " +
+      'up to five (043).',
   })
   async photo(
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
+    @Query('n', new DefaultValuePipe(1), ParseIntPipe) n: number,
   ): Promise<StreamableFile> {
     const { buffer, contentType } = await this.purchases.getPhotoFile(
       caller,
       id,
+      n,
     );
     return new StreamableFile(buffer, { type: contentType });
+  }
+
+  @Get(':id/history')
+  @ApiOperation({
+    summary: 'The change history of a purchase, oldest first (043)',
+  })
+  async history(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.purchases.history(caller, id);
+  }
+
+  @Post(':id/complete')
+  @ApiOperation({
+    summary: 'Complete a site entry (043)',
+    description:
+      'Head Office adds the vendor, quantity, rate and bill to a delivery the site recorded, and ' +
+      'only then does it move stock — the same ledger entry, balance, bill and GRN as creating a ' +
+      'purchase. 409 when it is already completed.',
+  })
+  async complete(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: CompletePurchaseDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.purchases.complete(caller, id, dto, ipAddress);
   }
 
   @Patch(':id')
@@ -99,7 +135,8 @@ export class PurchasesController {
     description:
       'Date and remarks only. Quantity, rate, item, store and vendor are what the ' +
       'ledger and the bill were computed from; correcting those is delete plus ' +
-      're-create.',
+      're-create. A site entry Head Office has not completed (043) may also have its ' +
+      'item and vehicle number corrected; each change is kept in its history.',
   })
   async update(
     @UserEntity() caller: AuthenticatedUser,

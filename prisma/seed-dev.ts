@@ -364,6 +364,8 @@ const ROLE_GRANTS: Record<
       Permission.INVENTORY,
       // 039: the Site In-charge raises job cards, as `20261021100002_standard_roles` grants.
       Permission.MAINTENANCE,
+      // 043: records deliveries from the site, as `20261025100001_site_purchase_entries` grants.
+      Permission.INVENTORY_SITE_ENTRY,
     ],
     read: [
       Permission.PROJECTS,

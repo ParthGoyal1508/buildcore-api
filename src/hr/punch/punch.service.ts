@@ -287,23 +287,6 @@ export class PunchService {
     // same commit as the refusal, because a comment that survives the change it describes is worse
     // than no comment: it is believed. ---
     const photoBytes = decodePhotoPayload(dto.photo, 'Punch photo');
-    const compressed = await this.images.compressPunchPhoto(photoBytes);
-
-    const stored = this.biometrics.deserializeDescriptor(enrolment.descriptor);
-    let faceMatchResult: FaceMatchResult = FaceMatchResult.exception;
-    let faceMatchDistance: number | null = null;
-    const candidate = await this.biometrics
-      .computeDescriptor([compressed])
-      // A photo with no detectable face is an exception for an admin to look at,
-      // not a 400 — the worker is presumably standing there regardless.
-      .catch(() => null);
-    if (candidate) {
-      const match = this.biometrics.compareDescriptors(candidate, stored);
-      faceMatchResult = match.matched
-        ? FaceMatchResult.matched
-        : FaceMatchResult.exception;
-      faceMatchDistance = match.distance;
-    }
 
     // The calendar day this punch counts for — the employee's, not the server's (FR-018a).
     // Computed **here**, before the fence is resolved, because 020 FR-016's per-employee
@@ -312,22 +295,51 @@ export class PunchService {
     // one in force when their phone reconnected.
     const punchDay = zonedDateOnly(capturedAt, this.settingsTimeZone);
 
-    // 020 FR-011, FR-016. No assignment → the employee's own site fence, exactly as before.
-    // That is every employee on the day this ships, which is why this table can be introduced
-    // with no backfill and refuse nobody.
-    const assignment = await this.assignments.inForceOn(
-      caller.rls,
-      employee.id,
-      punchDay,
-    );
+    // The face, the photo's compression and the location lookups depend on none of each other,
+    // so they run together (044): the punch waits for the slowest of them rather than their sum.
+    // The face is computed from the photo as uploaded rather than from the compressed copy —
+    // the matcher downscales on its own, and waiting for the re-encode only delayed it. Every
+    // check below still runs in the order it always has; only the waiting overlaps.
+    const [compressed, candidate, { assignment, geofence }, accuracyMax] =
+      await Promise.all([
+        this.images.compressPunchPhoto(photoBytes),
+        this.biometrics
+          .computeDescriptor([photoBytes])
+          // A photo with no detectable face is an exception for an admin to look at,
+          // not a 400 — the worker is presumably standing there regardless.
+          .catch(() => null),
+        // 020 FR-011, FR-016. No assignment → the employee's own site fence, exactly as
+        // before. That is every employee on the day this ships, which is why this table can
+        // be introduced with no backfill and refuse nobody.
+        this.assignments
+          .inForceOn(caller.rls, employee.id, punchDay)
+          .then(async (assignment) => ({
+            assignment,
+            // A mobile assignment carries no site (the check constraint enforces that), so
+            // the fence still resolves from the employee's own site. It is fetched for its
+            // **distance**, which is evidence worth recording, and then not allowed to refuse
+            // anything — see `geofenceResult`.
+            geofence: await this.sites.getGeofence(
+              caller.rls,
+              assignment?.siteId ?? employee.siteId,
+            ),
+          })),
+        // 020 FR-012b. Read per request, so a Super Admin raising the threshold takes effect
+        // on the next punch with no restart — which is what "configurable from the settings"
+        // has to mean to be useful.
+        this.companies.getPunchAccuracyMaxMetres(employee.companyId),
+      ]);
 
-    // A mobile assignment carries no site (the check constraint enforces that), so the fence
-    // still resolves from the employee's own site. It is fetched for its **distance**, which is
-    // evidence worth recording, and then not allowed to refuse anything — see `geofenceResult`.
-    const geofence = await this.sites.getGeofence(
-      caller.rls,
-      assignment?.siteId ?? employee.siteId,
-    );
+    const stored = this.biometrics.deserializeDescriptor(enrolment.descriptor);
+    let faceMatchResult: FaceMatchResult = FaceMatchResult.exception;
+    let faceMatchDistance: number | null = null;
+    if (candidate) {
+      const match = this.biometrics.compareDescriptors(candidate, stored);
+      faceMatchResult = match.matched
+        ? FaceMatchResult.matched
+        : FaceMatchResult.exception;
+      faceMatchDistance = match.distance;
+    }
 
     // 008 US2/AC4, closed by 025 FR-035. `SiteStatus.inactive` has been stored and editable since
     // 008 and read by nothing, so decommissioning a site did not stop attendance being recorded
@@ -344,13 +356,6 @@ export class PunchService {
           'If work is still happening here, the site has to be made active again.',
       );
     }
-
-    // 020 FR-012b. Read per request in the same call that already read the payroll lock day, so a
-    // Super Admin raising the threshold takes effect on the next punch with no restart — which is
-    // what "configurable from the settings" has to mean to be useful.
-    const accuracyMax = await this.companies.getPunchAccuracyMaxMetres(
-      employee.companyId,
-    );
 
     // A fix worse than the company's threshold means the punch cannot be **located**, which is a
     // different fact from being located outside the fence. Both currently produce the same

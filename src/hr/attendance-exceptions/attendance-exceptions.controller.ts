@@ -45,6 +45,12 @@ export class AttendanceExceptionsController {
     return this.exceptions.listPending(callerFrom(user, request), user);
   }
 
+  /**
+   * Kept although the web app never calls it (042 route-cleanup review, 2026-10-25):
+   * `test/attendance-exceptions.e2e-spec.ts` reads it (`rowFor`) in ten scenarios to
+   * check a single punch's chain state per viewer — including rejected and returned
+   * punches, which the pending-only list above can never return.
+   */
   @Get(':punchId')
   @ApiOperation({
     summary: 'One flagged punch and where its approval has got to',

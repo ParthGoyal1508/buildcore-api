@@ -45,38 +45,10 @@ export class LetterController {
     private readonly kinds: LetterKindsService,
   ) {}
 
-  /**
-   * Installs the shipped letter bodies for a company that predates them (2026-10-11).
-   *
-   * New companies get these from `CompaniesService.create`. This is for the ones that
-   * already existed — a data migration could not do it, because the bodies live in
-   * TypeScript beside the field declarations they must agree with, and splitting them
-   * into SQL is how a token ends up undeclared and rendered as a blank.
-   *
-   * **Brings them up to the standard wording** (2026-10-14). The wording of these kinds is
-   * the same for every company: a missing template is created, one that differs in body or
-   * name is rewritten, one that matches is left alone. The application start does the same
-   * for every company, so on a running server this normally reports nothing to change. The
-   * response names what it made, what it rewrote and what it left, so "nothing happened" is
-   * distinguishable from "nothing needed to happen".
-   *
-   * `?replace=true` used to be the opt-in to overwrite; overwriting is now the rule, and the
-   * parameter is ignored if sent.
-   */
-  @Post('letter-templates/install-standard')
-  @RequirePermissions(Permission.SETTINGS)
-  @ApiOperation({
-    summary: 'Install the standard letter templates this product ships',
-    description:
-      'Offer, appointment, experience, relieving, increment, transfer, termination, F&F ' +
-      'settlement and payment advice. Idempotent: a missing template is **created**, one ' +
-      'whose body or name differs from the standard wording is **replaced**, and one that ' +
-      'already matches is **skipped**. The same synchronisation runs on every application ' +
-      'start, so this normally reports nothing to change.',
-  })
-  installStandardTemplates(@UserEntity() caller: AuthenticatedUser) {
-    return this.templates.installStandard(caller);
-  }
+  // `POST letter-templates/install-standard` was deleted on 2026-10-25 (042 route cleanup):
+  // nothing called it — not the web app, the seeds, nor the ops scripts. The same
+  // synchronisation runs on every application start (`StandardTemplatesService`), and a new
+  // company gets its templates from `CompaniesService.create`.
 
   @Get('letter-templates')
   // Recruitment's own templates, and Settings → Letter templates, which manages every kind's

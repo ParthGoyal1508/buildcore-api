@@ -6,6 +6,15 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { monthLabel } from '../../common/form-document/form-format';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { companyScope } from '../../settings/company-scope';
+import type { RagRowFilter } from './dto/rag-query.dto';
+
+/** Server-side narrowing of the matrix (042): both optional, both ANDed. */
+export interface RagMatrixFilters {
+  /** Rows whose contractor name contains this, case-insensitive. */
+  search?: string;
+  /** Rows with at least one month in this state. */
+  status?: RagRowFilter;
+}
 
 export type RagCellStatus =
   | 'verified'
@@ -109,6 +118,7 @@ export class RagService {
     caller: AuthenticatedUser,
     fy: string,
     companyId?: string,
+    filters: RagMatrixFilters = {},
     now: Date = new Date(),
   ): Promise<RagMatrixResponse> {
     const months = financialYearMonths(fy);
@@ -155,36 +165,49 @@ export class RagService {
         ]),
       );
 
-      return {
-        fy,
-        months,
-        rows: contractors.map((contractor) => ({
-          contractorProfileId: contractor.id,
-          contractorName: contractor.vendor.name,
-          cells: months.map((month) => {
-            if (month > thisMonth) {
-              return {
-                month,
-                status: 'gray' as RagCellStatus,
-                complianceId: null,
-              };
-            }
-            const record = byKey.get(`${contractor.id}:${month}`);
-            if (!record) {
-              return {
-                month,
-                status: 'missing' as RagCellStatus,
-                complianceId: null,
-              };
-            }
+      let rows = contractors.map((contractor) => ({
+        contractorProfileId: contractor.id,
+        contractorName: contractor.vendor.name,
+        cells: months.map((month) => {
+          if (month > thisMonth) {
             return {
               month,
-              status: record.status as RagCellStatus,
-              complianceId: record.id,
+              status: 'gray' as RagCellStatus,
+              complianceId: null,
             };
-          }),
-        })),
-      };
+          }
+          const record = byKey.get(`${contractor.id}:${month}`);
+          if (!record) {
+            return {
+              month,
+              status: 'missing' as RagCellStatus,
+              complianceId: null,
+            };
+          }
+          return {
+            month,
+            status: record.status as RagCellStatus,
+            complianceId: record.id,
+          };
+        }),
+      }));
+
+      // 042: the screen's contractor search and status filter, applied here so they narrow the
+      // whole matrix rather than whatever the browser happened to hold. A status keeps a row
+      // when any of its months is in that state; the export takes no filters and stays whole.
+      const needle = filters.search?.trim().toLowerCase();
+      if (needle) {
+        rows = rows.filter((row) =>
+          row.contractorName.toLowerCase().includes(needle),
+        );
+      }
+      if (filters.status) {
+        rows = rows.filter((row) =>
+          row.cells.some((cell) => cell.status === filters.status),
+        );
+      }
+
+      return { fy, months, rows };
     });
   }
 

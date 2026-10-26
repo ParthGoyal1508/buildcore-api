@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import type { NestConfig } from './configs/config.interface';
 import { ApiExceptionFilter } from './filters/api-exception.filter';
+import { mergeExposedHeaders } from './merge-exposed-headers';
 import { installBodyParsers } from './uploads/large-body';
 import { DEFAULT_REQUEST_BODY_LIMIT } from './uploads/upload-limits';
 
@@ -57,6 +58,12 @@ export function configureApp(app: INestApplication): void {
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     }),
   );
+
+  // `Access-Control-Expose-Headers` writes merge rather than replace (042, open from 036 Wave 4):
+  // file-download handlers set their own list and were hiding `X-Company-Id` on exactly those
+  // responses. Registered before the CORS middleware (added later, in `main.ts`), so the CORS
+  // list is already merged into by the time a handler writes.
+  app.use(mergeExposedHeaders);
 
   // Two body limits (036 B8): the upload limit on the routes that carry files, derived from
   // their DTOs, and a small default everywhere else — see `uploads/large-body.ts`. Read from

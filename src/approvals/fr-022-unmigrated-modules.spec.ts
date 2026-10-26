@@ -588,6 +588,14 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/plant/maintenance/job-card-flow.service.spec.ts',
           ':(exclude)src/plant/maintenance/job-card-workflow.ts',
           ':(exclude)src/plant/maintenance/job-card.service.spec.ts',
+          // 042 (gap closure), 2026-10-25: unit specs for the worker list's NOC open/closed
+          // filter. **Verified by grep: nothing in it calls `ApprovalService` or
+          // `approvals.submit`.**
+          ':(exclude)src/labour/workers/labour-worker.service.spec.ts',
+          // 043 (site purchase entries), 2026-10-25: the site's delivery entry — a partial
+          // purchase Head Office completes. **Verified by grep: nothing in it calls
+          // `ApprovalService` or `approvals.submit`.**
+          ':(exclude)src/inventory/site-entries',
         ],
         {
           cwd: REPO_ROOT,

@@ -130,7 +130,15 @@ describe('BOCWService.list', () => {
     const ws = wb.worksheets[0];
     expect(ws.getRow(1).getCell(1).value).toBe('Project');
     expect(ws.getRow(2).values).toEqual(
-      expect.arrayContaining(['Metro Depot', 10_000_000, 1, 100_000, 40_000, 60_000, 'Part paid']),
+      expect.arrayContaining([
+        'Metro Depot',
+        10_000_000,
+        1,
+        100_000,
+        40_000,
+        60_000,
+        'Part paid',
+      ]),
     );
     expect(ws.getRow(3).getCell(1).value).toBe('Total');
   });
@@ -139,5 +147,38 @@ describe('BOCWService.list', () => {
     const { service, caller } = build([], true, 0);
     const result = await service.list(caller);
     expect(result.unavailableModules).toEqual([]);
+  });
+
+  describe('server-side filters (042)', () => {
+    // p1 is fully paid (100_000 against a 100_000 liability); p2 has paid nothing.
+    const projects = [
+      { projectId: 'p1', name: 'Metro Depot', contractValue: 10_000_000 },
+      { projectId: 'p2', name: 'River Bridge', contractValue: 5_000_000 },
+    ];
+
+    it('narrows by project name, case-insensitively', async () => {
+      const { service, caller } = build(projects, true, 100_000);
+      const result = await service.list(caller, undefined, {
+        search: 'bRiDgE',
+      });
+      expect(result.rows.map((r) => r.projectName)).toEqual(['River Bridge']);
+    });
+
+    it('narrows by payment state', async () => {
+      const { service, caller } = build(projects, true, 100_000);
+      const paid = await service.list(caller, undefined, { status: 'paid' });
+      expect(paid.rows.map((r) => r.projectId)).toEqual(['p1']);
+
+      const pending = await service.list(caller, undefined, {
+        status: 'pending',
+      });
+      expect(pending.rows.map((r) => r.projectId)).toEqual(['p2']);
+    });
+
+    it('returns every row when no filter is passed', async () => {
+      const { service, caller } = build(projects, true, 100_000);
+      const result = await service.list(caller);
+      expect(result.rows).toHaveLength(2);
+    });
   });
 });

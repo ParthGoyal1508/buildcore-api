@@ -156,6 +156,83 @@ describe('RolesService', () => {
       } as never);
       expect(roles.map((r) => r.activeHolderCount)).toEqual([2, 0]);
     });
+
+    /**
+     * `grantable: true` (042): the invite form's role list used to show every visible role and
+     * let the server refuse the choice on submit (`assertMayGrant`, 2026-10-16 audit C1–C3).
+     * The list now applies the same ceiling, so what is offered is what would be accepted.
+     */
+    describe('grantable (042)', () => {
+      const hrOnly = {
+        id: 'role-hr',
+        name: 'HR Clerk',
+        isProtected: false,
+        permissions: [],
+        rolePermissions: [
+          { permission: Permission.EMPLOYEES, level: AccessLevel.read },
+        ],
+      };
+      const machineryWrite = {
+        id: 'role-mc',
+        name: 'Plant Manager',
+        isProtected: false,
+        permissions: [],
+        rolePermissions: [
+          { permission: Permission.MACHINERY, level: AccessLevel.write },
+        ],
+      };
+      // A legacy role: a bare permissions array means both levels of the area.
+      const legacyMachinery = {
+        id: 'role-legacy',
+        name: 'Old Plant Role',
+        isProtected: false,
+        permissions: [Permission.MACHINERY],
+        rolePermissions: [],
+      };
+      const all = [hrOnly, legacyMachinery, machineryWrite];
+
+      const machineryWriter = callerFor('company-1', {
+        permissions: [],
+        grants: [
+          { permission: Permission.MACHINERY, level: AccessLevel.read },
+          { permission: Permission.MACHINERY, level: AccessLevel.write },
+        ],
+      });
+
+      it('offers only the roles within the caller’s own grants', async () => {
+        const { service } = build({
+          findMany: jest.fn().mockResolvedValue(all),
+        });
+
+        const roles = await service.findAll(machineryWriter, {
+          grantable: true,
+        });
+
+        // Both machinery roles are within the ceiling — the legacy array reads as both
+        // levels, which the caller holds. The HR role is beyond it.
+        expect(roles.map((r) => r.id)).toEqual(['role-legacy', 'role-mc']);
+      });
+
+      it('refuses nothing when the flag is off, exactly as before', async () => {
+        const { service } = build({
+          findMany: jest.fn().mockResolvedValue(all),
+        });
+
+        const roles = await service.findAll(machineryWriter);
+
+        expect(roles).toHaveLength(3);
+      });
+
+      it('offers everything to a caller holding everything', async () => {
+        const { service } = build({
+          findMany: jest.fn().mockResolvedValue(all),
+        });
+
+        const roles = await service.findAll(admin, { grantable: true });
+
+        expect(roles).toHaveLength(3);
+      });
+    });
   });
 
   describe('update', () => {

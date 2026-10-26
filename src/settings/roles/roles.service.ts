@@ -19,7 +19,7 @@ import { rlsContextFor } from '../../common/prisma/rls-context';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { UsersService } from '../../users/users.service';
-import { assertMayGrant } from './grant-ceiling';
+import { assertMayGrant, expandRoleGrants, mayGrantAll } from './grant-ceiling';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 
@@ -94,7 +94,18 @@ export class RolesService {
    * named, for a group administrator with no company selected. The counts come from
    * `UsersService`, not a join into `shared.User` — Principle I.
    */
-  async findAll(caller?: AuthenticatedUser): Promise<RoleWithAssignedCount[]> {
+  async findAll(
+    caller?: AuthenticatedUser,
+    options: {
+      /**
+       * Only roles every grant of which the caller holds — the set they may actually assign
+       * (042), by the same `assertMayGrant` ceiling the invite and user-role endpoints apply
+       * on submit. The invite form's role list used to show every visible role and let the
+       * server refuse the choice afterwards.
+       */
+      grantable?: boolean;
+    } = {},
+  ): Promise<RoleWithAssignedCount[]> {
     const holders = caller
       ? await this.usersService.activeHolderCounts(rlsContextFor(caller))
       : null;
@@ -110,8 +121,20 @@ export class RolesService {
         company: { select: { name: true } },
       },
     });
+    const offered =
+      options.grantable && caller
+        ? roles.filter((role) =>
+            mayGrantAll(
+              caller,
+              expandRoleGrants(
+                role.permissions ?? [],
+                role.rolePermissions ?? [],
+              ),
+            ),
+          )
+        : roles;
     return Promise.all(
-      roles.map(async ({ rolePermissions, company, ...role }) => ({
+      offered.map(async ({ rolePermissions, company, ...role }) => ({
         ...role,
         assignedUserCount: await this.usersService.countByRoleId(role.id),
         ...(holders ? { activeHolderCount: holders.get(role.id) ?? 0 } : {}),

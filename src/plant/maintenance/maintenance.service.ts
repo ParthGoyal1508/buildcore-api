@@ -26,7 +26,6 @@ import {
   CloseMaintenanceJobDto,
   CreateMaintenanceJobDto,
   ListMaintenanceDto,
-  UpdateMaintenanceJobDto,
 } from './dto/maintenance.dto';
 
 export interface MaintenanceJobRow {
@@ -279,66 +278,6 @@ export class MaintenanceService {
       changes: { equipmentId: created.equipmentId, type: created.type },
     });
     return this.toRow(created);
-  }
-
-  async update(
-    caller: AuthenticatedUser,
-    jobId: string,
-    dto: UpdateMaintenanceJobDto,
-    ipAddress: string,
-  ): Promise<MaintenanceJobRow> {
-    const updated = await withRlsContext(
-      this.prisma,
-      rlsContextFor(caller),
-      async (tx) => {
-        const existing = await tx.maintenanceJob.findUnique({
-          where: { id: jobId },
-        });
-        if (!existing) throw new NotFoundException('Maintenance job not found');
-        assertInScope(caller, existing, 'Maintenance job');
-
-        if (dto.linkedServiceScheduleId) {
-          const schedule = await tx.serviceSchedule.findUnique({
-            where: { id: dto.linkedServiceScheduleId },
-          });
-          if (!schedule || schedule.equipmentId !== existing.equipmentId) {
-            throw new BadRequestException(
-              'linkedServiceScheduleId must be a service schedule on this machine.',
-            );
-          }
-        }
-
-        return tx.maintenanceJob.update({
-          where: { id: jobId },
-          data: {
-            ...(dto.description !== undefined
-              ? { description: dto.description.trim() }
-              : {}),
-            ...(dto.partsDescription !== undefined
-              ? { partsDescription: dto.partsDescription }
-              : {}),
-            ...(dto.labourCost !== undefined
-              ? { labourCost: dto.labourCost }
-              : {}),
-            ...(dto.linkedServiceScheduleId !== undefined
-              ? { linkedServiceScheduleId: dto.linkedServiceScheduleId }
-              : {}),
-          },
-          include: this.include,
-        });
-      },
-    );
-
-    await this.auditLog.record({
-      entityType: AuditEntityType.MAINTENANCE_JOB,
-      action: AuditAction.UPDATE,
-      entityId: jobId,
-      accountId: caller.id,
-      companyId: updated.companyId,
-      ipAddress,
-      changes: { ...dto },
-    });
-    return this.toRow(updated);
   }
 
   /**

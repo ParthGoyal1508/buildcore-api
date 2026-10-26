@@ -106,6 +106,38 @@ describe('NocsService (036 B16, B4, B5)', () => {
     ).toBe(415);
   });
 
+  it('names the closed subjects once each, not counting an LOI-stage NOC (042)', async () => {
+    const { service, prisma } = build();
+    (prisma.tx.nocDocument.findMany as jest.Mock).mockResolvedValue([
+      // The LOI NOC is a step on the way; it does not close the work order.
+      { subjectType: 'work_order', subjectId: 'wo-1', stage: 'loi' },
+      { subjectType: 'work_order', subjectId: 'wo-2', stage: 'work_order' },
+      // Pre-stage upload (stage null) counts as the closing one, and duplicates collapse.
+      { subjectType: 'work_order', subjectId: 'wo-2', stage: null },
+      { subjectType: 'work_order', subjectId: 'wo-3', stage: null },
+    ]);
+
+    const closed = await service.closedSubjectIds(
+      caller([AccessLevel.read]),
+      'work_order',
+    );
+
+    expect(closed).toEqual(['wo-2', 'wo-3']);
+    expect(prisma.tx.nocDocument.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { subjectType: 'work_order' } }),
+    );
+  });
+
+  it("refuses the closed-subject set to a caller without the subject's area", async () => {
+    const { service } = build();
+    // The caller holds PROJECTS; a labour_worker query needs DAILY_WORKER_REGISTRY.
+    expect(
+      await status(
+        service.closedSubjectIds(caller([AccessLevel.read]), 'labour_worker'),
+      ),
+    ).toBe(403);
+  });
+
   it('stores the detected type, not the declared one, under the selected company', async () => {
     const { service, storage, prisma, created } = build();
     const switched = caller([AccessLevel.read, AccessLevel.write], {

@@ -7,6 +7,7 @@ import {
   IsArray,
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -54,6 +55,16 @@ export class ListWorkersDto {
   @IsString()
   @MaxLength(200)
   search?: string;
+
+  @ApiPropertyOptional({
+    enum: ['open', 'closed'],
+    description:
+      'Only workers whose NOC is still awaited (`open`) or already uploaded (`closed`) — ' +
+      'the same open/closed rule `GET /nocs/status` reports (042).',
+  })
+  @IsOptional()
+  @IsIn(['open', 'closed'])
+  nocStatus?: 'open' | 'closed';
 
   @ApiPropertyOptional()
   @IsOptional()

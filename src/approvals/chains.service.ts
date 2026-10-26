@@ -7,6 +7,7 @@ import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../auth/audit-log.service';
+import { UsersService } from '../users/users.service';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
 import { APPROVAL_CHAIN_UNSATISFIABLE } from './approval-error-codes';
 import { labelForSlot, SLOT_FINAL } from './approval-slots';
@@ -45,6 +46,9 @@ export class ChainsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
+    // The one place the spine learns anything about `settings.Role` (Principle I): which
+    // company a role belongs to, for the foreign-role refusal in `putSlotMapping`.
+    private readonly users: UsersService,
   ) {}
 
   /** Every chain defined for a company, levels included, in position order. */
@@ -331,6 +335,24 @@ export class ChainsService {
     input: { companyId: string; slotKey: string; roleId: string },
     actor: { userId: string; ipAddress: string },
   ) {
+    // A company's own role is mappable only in its own company (036 C10) — the same
+    // refusal role *assignment* makes (`UsersService.updateRoleOrStatus`). Unchecked,
+    // a SETTINGS holder could bind this company's approval slot to another company's
+    // role, handing that company's accounts the right to approve items here (042).
+    const role = await this.users.roleCompanyOf(input.roleId);
+    if (!role) {
+      throw new BadRequestException(`Role ${input.roleId} does not exist`);
+    }
+    if (role.companyId !== null && role.companyId !== input.companyId) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'ROLE_OF_ANOTHER_COMPANY',
+        message:
+          'That role belongs to another company and cannot be bound to an approval ' +
+          'slot here. Choose one of this company’s roles, or a global one.',
+      });
+    }
+
     const conflict = await this.findSlotConflict(ctx, input);
     if (conflict) {
       throw new BadRequestException({

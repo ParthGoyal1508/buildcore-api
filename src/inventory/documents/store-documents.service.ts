@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { PurchaseStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -317,7 +318,12 @@ export class StoreDocumentsService {
             indentLine: { include: { indent: true } },
           },
         });
-        if (!purchase || purchase.deleted) {
+        // 043: a site entry waiting for Head Office has no GRN until it is completed.
+        if (
+          !purchase ||
+          purchase.deleted ||
+          purchase.status !== PurchaseStatus.completed
+        ) {
           throw new NotFoundException('Purchase not found');
         }
         assertInScope(caller, purchase, 'Purchase');

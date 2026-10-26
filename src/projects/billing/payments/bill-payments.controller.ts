@@ -215,35 +215,10 @@ export class BillPaymentsController {
   }
 
   // ── Signed copies ────────────────────────────────────────────────────────
-
-  @Post('projects/ra-bills/:raBillId/signed-copy')
-  @ApiOperation({
-    summary: 'File the countersigned copy of a bill',
-    description:
-      'The arrival of the copy **acknowledges the bill** — `acknowledgedAt` is set from the date ' +
-      'it was received, not from the clock. A file in a list cannot answer "which bills are ' +
-      'unacknowledged", which is the only question anybody asks of it.\n\n' +
-      'The first copy sets the date; a later replacement scan does not move it.',
-  })
-  async uploadBillSignedCopy(
-    @UserEntity() caller: AuthenticatedUser,
-    @Param('raBillId') raBillId: string,
-    @Body() dto: UploadSignedCopyDto,
-    @Query('companyId') companyId?: string,
-  ) {
-    return this.signedCopies.upload(
-      rlsContextFor(caller),
-      resolveCompanyId(caller, companyId),
-      SignedCopySubject.ra_bill,
-      raBillId,
-      {
-        data: Buffer.from(dto.data, 'base64'),
-        fileName: dto.fileName,
-        receivedOn: dto.receivedOn,
-      },
-      { userId: caller.id },
-    );
-  }
+  //
+  // A bill's own countersigned copy is filed by `bill-package.controller.ts`'s Certify
+  // (2026-10-14), which superseded the direct POST route this section used to carry
+  // (deleted 2026-10-25, 042 route cleanup — nothing called it).
 
   @Post('projects/bill-package-debits/:debitId/signed-copy')
   @ApiOperation({
