@@ -139,8 +139,12 @@ export class SitesService {
     };
   }
 
-  /** Day-of-week this site treats as Weekly Off, 0 = Sunday (research.md §6). */
-  async getWeeklyOffDay(ctx: RlsContext, siteId: string): Promise<number> {
+  /** Day-of-week this site treats as Weekly Off, 0 = Sunday (research.md §6); null when the
+   * site has none, which no day of the week ever equals. */
+  async getWeeklyOffDay(
+    ctx: RlsContext,
+    siteId: string,
+  ): Promise<number | null> {
     const site = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.site.findFirst({
         where: { id: siteId },
