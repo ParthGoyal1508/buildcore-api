@@ -39,6 +39,10 @@ describe('statusForDay', () => {
     expect(facts({ dayOfWeek: SUNDAY })).toBe('weekly_off');
   });
 
+  it('is never a weekly off at a site with none', () => {
+    expect(facts({ dayOfWeek: SUNDAY, weeklyOffDay: null })).toBe('absent');
+  });
+
   it('is absent on a working day with nothing recorded', () => {
     expect(facts()).toBe('absent');
   });

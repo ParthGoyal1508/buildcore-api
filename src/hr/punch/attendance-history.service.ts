@@ -76,7 +76,8 @@ export interface AttendanceMonth {
  * sight — see `statusForDay` below. */
 export interface DayFacts {
   dayOfWeek: number;
-  weeklyOffDay: number;
+  /** Null for a site with no weekly off. */
+  weeklyOffDay: number | null;
   isHoliday: boolean;
   isOnApprovedLeave: boolean;
   hasPunch: boolean;

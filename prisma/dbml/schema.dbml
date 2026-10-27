@@ -915,7 +915,8 @@ binary floating point would make a boundary punch\'s in/out verdict depend on
 representation error rather than on where the worker actually stood.']
   longitude Decimal [not null]
   geofenceRadiusMeters Int [not null]
-  weeklyOffDay Int [not null, note: 'Day-of-week treated as Weekly Off, 0 = Sunday (research.md §6).']
+  weeklyOffDay Int [note: 'Day-of-week treated as Weekly Off, 0 = Sunday (research.md §6). Null is a site with no
+weekly off (2026-10-27): the client\'s O&M sites run every day of the week.']
   projectId String [note: 'The project this site belongs to. Nullable because sites created by 003 predate
 the Project table entirely, and a site can legitimately outlive its project.
 `SetNull` rather than `Cascade`: deleting a project must not silently delete the

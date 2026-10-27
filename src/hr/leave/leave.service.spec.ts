@@ -29,6 +29,10 @@ describe('leave-days', () => {
       expect(countLeaveDays(MONDAY, MONDAY, SUNDAY_OFF, [])).toBe(1);
     });
 
+    it('charges every day at a site with no weekly off', () => {
+      expect(countLeaveDays(MONDAY, SUNDAY, null, [])).toBe(7);
+    });
+
     it('excludes the weekly off day', () => {
       // Mon–Sun is seven dates, of which the Sunday is not a working day.
       expect(countLeaveDays(MONDAY, SUNDAY, SUNDAY_OFF, [])).toBe(6);
