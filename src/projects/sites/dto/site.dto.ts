@@ -12,6 +12,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
 
 /**
@@ -69,13 +70,16 @@ export class CreateSiteDto {
   @ApiProperty({
     minimum: 0,
     maximum: 6,
-    description: 'Day treated as Weekly Off, 0 = Sunday.',
+    nullable: true,
+    description:
+      'Day treated as Weekly Off, 0 = Sunday; null for a site that works every day (2026-10-27).',
   })
+  @ValidateIf((dto: CreateSiteDto) => dto.weeklyOffDay !== null)
   @Type(() => Number)
   @IsInt()
   @Min(0)
   @Max(6)
-  weeklyOffDay!: number;
+  weeklyOffDay!: number | null;
 
   @ApiPropertyOptional({ description: 'The project this site belongs to.' })
   @IsOptional()

@@ -731,5 +731,21 @@ describe('Projects module (e2e)', () => {
         })
         .expect(400);
     });
+
+    // 2026-10-27: the client's O&M sites run every day of the week.
+    it('keeps a site with no weekly off as null', async () => {
+      const created = await http()
+        .post(`/projects/sites?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          name: unique('AllWeek'),
+          latitude: 19,
+          longitude: 72,
+          geofenceRadiusMeters: 100,
+          weeklyOffDay: null,
+        })
+        .expect(201);
+      expect(created.body.weeklyOffDay).toBeNull();
+    });
   });
 });

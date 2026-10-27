@@ -146,7 +146,8 @@ export function eachDateInRange(from: string, to: string): string[] {
 export function countLeaveDays(
   fromDate: string,
   toDate: string,
-  weeklyOffDay: number,
+  /** Null for a site with no weekly off: every day is chargeable. */
+  weeklyOffDay: number | null,
   holidays: readonly string[],
 ): number {
   const holidaySet = new Set(holidays);

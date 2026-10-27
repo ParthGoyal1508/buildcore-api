@@ -754,7 +754,7 @@ export class LeaveService {
     toDate: string,
   ): Promise<{
     days: number;
-    weeklyOffDay: number;
+    weeklyOffDay: number | null;
     excluded: { date: string; reason: 'weekly_off' | 'holiday' }[];
   }> {
     const from = parseDateOnly(fromDate);

@@ -1714,8 +1714,9 @@ model Site {
   longitude            Decimal @db.Decimal(10, 7)
   geofenceRadiusMeters Int
 
-  /// Day-of-week treated as Weekly Off, 0 = Sunday (research.md §6).
-  weeklyOffDay Int
+  /// Day-of-week treated as Weekly Off, 0 = Sunday (research.md §6). Null is a site with no
+  /// weekly off (2026-10-27): the client's O&M sites run every day of the week.
+  weeklyOffDay Int?
 
   /// ── Added by feature 008. Every column below is nullable or defaulted, so the
   /// migration is additive and the rows 003 already created stay valid. The four
