@@ -13,6 +13,7 @@ import {
   REGISTRATION_PAPERS,
   SERVICE_DUE_SOON_MARGIN,
 } from '../constants/plant.constants';
+import { paperOfDocType } from '../equipment/equipment.service';
 
 /** How far back the service-due rule looks to estimate a machine's daily usage. */
 const USAGE_WINDOW_DAYS = 30;
@@ -64,7 +65,18 @@ export class EquipmentDocumentExpiryRule implements ReminderRuleProvider {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const documents = await tx.equipmentDocument.findMany({
         where: { expiresAt: { not: null, lte: horizon } },
-        include: { equipment: { select: { code: true, name: true } } },
+        include: {
+          equipment: {
+            select: {
+              code: true,
+              name: true,
+              registration: {
+                where: { status: 'held', expiresAt: { not: null } },
+                select: { kind: true },
+              },
+            },
+          },
+        },
       });
       if (documents.length === 0) return [];
 
@@ -76,14 +88,48 @@ export class EquipmentDocumentExpiryRule implements ReminderRuleProvider {
       });
       const byId = new Map(docTypes.map((type) => [type.id, type]));
 
+      // A renewed policy is uploaded beside the lapsed one, not over it. Only the latest expiry of
+      // each kind on each machine is the one to chase; the older scan is history.
+      const latest = await tx.equipmentDocument.groupBy({
+        by: ['equipmentId', 'docTypeId'],
+        where: {
+          equipmentId: {
+            in: [...new Set(documents.map((doc) => doc.equipmentId))],
+          },
+          expiresAt: { not: null },
+        },
+        _max: { expiresAt: true },
+      });
+      const latestOf = new Map(
+        latest.map((row) => [
+          `${row.equipmentId}:${row.docTypeId}`,
+          row._max.expiresAt?.getTime(),
+        ]),
+      );
+
       return documents.flatMap((document): ReminderCandidate[] => {
         const docType = byId.get(document.docTypeId);
         const expiresAt = document.expiresAt as Date;
+        if (
+          (latestOf.get(`${document.equipmentId}:${document.docTypeId}`) ?? 0) >
+          expiresAt.getTime()
+        ) {
+          return [];
+        }
         const alertDays = docType?.alertDays ?? 0;
         const window = new Date(Date.now() + alertDays * MS_PER_DAY);
         // Inside its own type's window, or already lapsed. A document that expired
         // last month still needs chasing — more, not less.
         if (expiresAt > window) return [];
+        // An insurance or fitness scan whose paper the register already dates is reminded about
+        // once, by the registration rule below — the same policy is not two reminders.
+        const paper = paperOfDocType(docType?.name ?? '');
+        if (
+          paper &&
+          document.equipment.registration.some((item) => item.kind === paper)
+        ) {
+          return [];
+        }
 
         return [
           {
@@ -105,10 +151,9 @@ export class EquipmentDocumentExpiryRule implements ReminderRuleProvider {
  * Registration papers lapsing (2026-10-15) — the vehicle register's insurance, fitness, road tax,
  * permit and pollution dates, recorded on the machine whether or not a scan has been uploaded.
  *
- * A paper with an uploaded document carrying the same expiry is also reminded about by the rule
- * above, under its document; the two read differently ("Insurance paper" vs the document type's
- * name), and a register kept without scans is the common case this rule exists for. Thirty days,
- * as the register shades them.
+ * A paper dated here is reminded about only here: the document rule above skips an uploaded scan
+ * of a paper the register already dates, so one policy is one reminder. A register kept without
+ * scans is the common case this rule exists for. Thirty days, as the register shades them.
  */
 @ReminderRule()
 @Injectable()

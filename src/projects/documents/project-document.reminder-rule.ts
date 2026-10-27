@@ -80,19 +80,55 @@ export class ProjectDocumentExpiryRule implements ReminderRuleProvider {
       names.set(companyId, new Map(types.map((t) => [t.id, t.name])));
     }
 
-    return documents.map((document) => ({
-      companyId: document.companyId,
-      entityId: document.id,
-      // The kind by name, falling back to the label stored on the row. A reminder reading
-      // "PROJECT_DOCUMENT cmu3l… expires in 9 days" sends somebody to look it up before they can
-      // act on it.
-      subject: `${
-        (document.documentTypeId &&
-          names.get(document.companyId)?.get(document.documentTypeId)) ||
-        document.documentType
-      } expires`,
-      dueDate: document.expiresAt as Date,
-      actionLink: `/dashboard/projects/portfolio/${document.projectId}/documents`,
-    }));
+    // A renewed certificate is filed beside the lapsed one, not over it: only the latest expiry of
+    // each kind on each project is the one to chase. Kind is the type id, or the free-text label for
+    // a supplementary document that has none.
+    const kindOf = (d: {
+      projectId: string;
+      documentTypeId: string | null;
+      documentType: string;
+    }) =>
+      `${d.projectId}:${
+        d.documentTypeId ?? d.documentType.trim().toLowerCase()
+      }`;
+    const all = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.projectDocument.findMany({
+        where: {
+          projectId: { in: [...new Set(documents.map((d) => d.projectId))] },
+          expiresAt: { not: null },
+        },
+        select: {
+          projectId: true,
+          documentTypeId: true,
+          documentType: true,
+          expiresAt: true,
+        },
+      }),
+    );
+    const latest = new Map<string, number>();
+    for (const d of all) {
+      const key = kindOf(d);
+      const at = (d.expiresAt as Date).getTime();
+      latest.set(key, Math.max(latest.get(key) ?? 0, at));
+    }
+
+    return documents
+      .filter(
+        (d) => (d.expiresAt as Date).getTime() >= (latest.get(kindOf(d)) ?? 0),
+      )
+      .map((document) => ({
+        companyId: document.companyId,
+        entityId: document.id,
+        // The kind by name, falling back to the label stored on the row. A reminder reading
+        // "PROJECT_DOCUMENT cmu3l… expires in 9 days" sends somebody to look it up before they can
+        // act on it.
+        subject: `${
+          (document.documentTypeId &&
+            names.get(document.companyId)?.get(document.documentTypeId)) ||
+          document.documentType
+        } expires`,
+        dueDate: document.expiresAt as Date,
+        actionLink: `/dashboard/projects/portfolio/${document.projectId}/documents`,
+      }));
   }
 }
