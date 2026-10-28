@@ -6,6 +6,8 @@ const SEED = {
   projectId: 'project-1',
   groups: [{ name: 'G', boqNo: '1', items: [] }],
   quotedPercentage: '0.024600',
+  schedules: [],
+  existingLines: 0,
   // The tender variant. `estimate-import.spec.ts` covers the other.
   isEstimate: false,
 };

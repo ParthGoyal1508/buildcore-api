@@ -111,6 +111,33 @@ export class BoqController {
     );
   }
 
+  @Delete('groups/:groupId')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Remove a section that holds no lines (047)',
+    description:
+      'Only an empty section. One with lines is refused rather than cascading them away — each ' +
+      'line’s own delete checks its references, and this must not be a way around that.',
+  })
+  @ApiResponse({ status: 404, description: 'Not a section of this project.' })
+  @ApiResponse({
+    status: 409,
+    description: '`BOQ_GROUP_NOT_EMPTY` — the section still holds lines.',
+  })
+  @ApiResponse({ status: 423, description: 'The project is locked.' })
+  async deleteGroup(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') projectId: string,
+    @Param('groupId') groupId: string,
+    @Ip() ipAddress: string,
+  ) {
+    return this.boq.deleteGroup(rlsContextFor(caller), projectId, groupId, {
+      accountId: caller.id,
+      companyId: resolveCompanyId(caller),
+      ipAddress,
+    });
+  }
+
   @Post('items')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({
@@ -145,7 +172,9 @@ export class BoqController {
       '**Omitting a field leaves it unchanged; sending `null` clears it.** The two are different ' +
       'intentions, and a planner removing a wrong finish date needs a way to say so.\n\n' +
       '**Scope, rate, unit and description are not accepted.** A programme is *when* the work ' +
-      'happens; those are *what the work is*. Sending one is a 400 rather than a quiet no-op.',
+      'happens; those are *what the work is*. Sending one is a 400 rather than a quiet no-op.\n\n' +
+      '047: `pricingBasis` is accepted, and refused with 409 `BOQ_PRICING_BASIS_LOCKED` once a ' +
+      'client bill measures the line.',
   })
   @ApiResponse({
     status: 400,
@@ -291,6 +320,8 @@ export class BoqController {
       projectId,
       ctx: rlsContextFor(caller),
       ipAddress,
+      quotedPercentageSource: body.quotedPercentageSource,
+      replaceExisting: body.replaceExisting,
     });
   }
 
@@ -299,9 +330,13 @@ export class BoqController {
   @ApiOperation({
     summary: 'Commit a reviewed batch — once, by the person who reviewed it',
     description:
-      'One transaction. Refused if the project already has lines, if the batch belongs to someone ' +
-      'else or another project, or if it has already been imported — and the refusal says which, ' +
-      'because "it already worked" and "it never existed" need opposite actions.',
+      'One transaction. Refused if the batch belongs to someone else or another project, or if it ' +
+      'has already been imported — and the refusal says which, because "it already worked" and ' +
+      '"it never existed" need opposite actions.\n\n' +
+      '047: when the project already has lines, `replaceExisting: true` replaces them (refused ' +
+      'with `BOQ_REPLACE_BLOCKED` if any is measured, in a DWR, billed or awarded); when the ' +
+      'workbook’s quoted percentage differs from the project’s, `quotedPercentageSource` must say ' +
+      'which to keep.',
   })
   async confirmImport(
     @UserEntity() caller: AuthenticatedUser,
@@ -316,6 +351,8 @@ export class BoqController {
       projectId,
       ctx: rlsContextFor(caller),
       ipAddress,
+      quotedPercentageSource: body.quotedPercentageSource,
+      replaceExisting: body.replaceExisting,
     });
   }
 }

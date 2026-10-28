@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { BoqPricingBasis } from '@prisma/client';
 import {
   IsBoolean,
+  IsEnum,
+  IsIn,
   IsDateString,
   IsInt,
   IsNotEmpty,
@@ -133,6 +136,17 @@ export class CreateBoqItemDto {
   @IsString()
   @MaxLength(2_000)
   variationRef?: string;
+
+  @ApiPropertyOptional({
+    enum: BoqPricingBasis,
+    default: BoqPricingBasis.percentage,
+    description:
+      '047. `percentage` takes the project’s quoted percentage on a bill; `item_rate` is billed ' +
+      'at its own rate. Defaults to `percentage`.',
+  })
+  @IsOptional()
+  @IsEnum(BoqPricingBasis)
+  pricingBasis?: BoqPricingBasis;
 }
 
 export class ConfirmBoqImportDto {
@@ -143,6 +157,26 @@ export class ConfirmBoqImportDto {
   @IsNotEmpty()
   @MaxLength(100)
   batchId!: string;
+
+  @ApiPropertyOptional({
+    enum: ['file', 'project'],
+    description:
+      '047. Which quoted percentage the project keeps when the workbook’s differs from the ' +
+      'project’s (`quotedPercentageDiffers` on the report). Required in that case and refused ' +
+      'without (`BOQ_QUOTED_PERCENTAGE_CHOICE_REQUIRED`); ignored otherwise.',
+  })
+  @IsOptional()
+  @IsIn(['file', 'project'])
+  quotedPercentageSource?: 'file' | 'project';
+
+  @ApiPropertyOptional({
+    description:
+      '047. Replace the project’s existing lines of this variant. Required when it has any; ' +
+      'refused (`BOQ_REPLACE_BLOCKED`) if any is measured, in a DWR, billed or awarded.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  replaceExisting?: boolean;
 }
 
 /**
@@ -178,6 +212,9 @@ export class ValidateBoqImportDto {
  * and create it again — impossible once a daily work report had measured against it. So every
  * imported line read *Not planned* permanently, and the alert tabs, the needed-rate derivation and
  * the five-state classification that 008 built had nothing to classify.
+ *
+ * (047 adds one exception, `pricingBasis`, which is how a line is priced rather than what it is,
+ * and is locked once a client bill measures the line.)
  *
  * Scope, rate, unit, description and BOQ number are **not accepted here at all**. A programme is
  * *when* the work happens; those five are *what the work is*, and a single form that edits both is
@@ -231,4 +268,14 @@ export class PlanBoqItemDto {
   @IsOptional()
   @IsNumberString()
   perDayQty?: string | null;
+
+  @ApiPropertyOptional({
+    enum: BoqPricingBasis,
+    description:
+      '047. How the line is priced. Refused (`BOQ_PRICING_BASIS_LOCKED`) once a client bill ' +
+      'measures the line. Omit to leave unchanged.',
+  })
+  @IsOptional()
+  @IsEnum(BoqPricingBasis)
+  pricingBasis?: BoqPricingBasis;
 }

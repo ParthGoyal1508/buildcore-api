@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { Injectable } from '@nestjs/common';
 
 import config from '../../common/configs/config';
+import { SchedulePricingBasis } from './schedule-block';
 
 export type BatchState = 'ready' | 'committing' | 'confirmed' | 'expired';
 
@@ -22,6 +23,15 @@ export interface StagedItem {
   /** `scopeQty × rate`, computed here and never read from the file (FR-044). */
   amount: string;
   sourceRow: number;
+  /** The pricing basis of the schedule the line came from (047). */
+  pricingBasis: SchedulePricingBasis;
+}
+
+/** One schedule of the batch, as much as `confirm` audits (047). */
+export interface StagedSchedule {
+  sheetName: string;
+  pricingBasis: SchedulePricingBasis;
+  lines: number;
 }
 
 export interface ImportBatch {
@@ -34,8 +44,18 @@ export interface ImportBatch {
   projectId: string;
   createdAt: Date;
   groups: StagedGroup[];
-  /** Null where the workbook's `Excess (+)` could not be located — never 0 (FR-040). */
+  /**
+   * The **workbook's** quoted percentage, from its percentage schedule(s). Null where it could not
+   * be located, or where the workbook has no percentage schedule — never 0 (FR-040).
+   */
   quotedPercentage: string | null;
+  /** The schedules the batch was read from (047) — audited on confirm. */
+  schedules: StagedSchedule[];
+  /**
+   * How many lines of this variant the project held at validate (047). Non-zero means confirming
+   * replaces them, which confirm requires to be asked for explicitly.
+   */
+  existingLines: number;
   /**
    * Whether this is an internal **estimate** rather than the client's tender (US4 AC6).
    *

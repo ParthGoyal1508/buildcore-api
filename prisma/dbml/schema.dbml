@@ -1128,6 +1128,13 @@ What makes it different, and why it is a flag: it is billed **at the rate entere
 tender premium** (an extra item is priced by agreement or analysis, not by the bid); it has no
 scope, so it is never "over scope"; and no daily work report measures it, so a bill proposes
 nothing for it and the quantity is the one entered on the bill.']
+  pricingBasis BoqPricingBasis [not null, default: 'percentage', note: 'How this line is priced against the client (047). `percentage` — the schedule rate with the
+project\'s quoted percentage applied, which is what a "Percentage BoQ" tender means; `item_rate`
+— the bidder\'s own rate, as quoted, with no percentage on top. A tender may carry both kinds
+in separate schedules, and applying the quoted percentage to item-rate lines bills them wrong.
+
+Default `percentage`, so every line that existed before 047 prices exactly as it did.
+Fixed once a client bill measures the line — see `BoqService.planItem`.']
   dwrTasks DWRTask [not null]
   clientBillLines ClientBillLine [not null]
   awardLines WorkOrderBOQItem [not null]
@@ -6476,6 +6483,11 @@ Enum ProjectBudgetCategory {
   fuel
   subcontractors
   overheads
+}
+
+Enum BoqPricingBasis {
+  percentage
+  item_rate
 }
 
 Enum ClientBillStatus {

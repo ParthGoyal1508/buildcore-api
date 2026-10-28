@@ -26,8 +26,13 @@ export interface ScheduleColumns {
   lastColumn: number;
 }
 
+/** How a schedule is priced — mirrors `BoqPricingBasis` without importing the client here. */
+export type SchedulePricingBasis = 'percentage' | 'item_rate';
+
 export interface IdentifiedSchedule {
   sheetName: string;
+  /** Read from the sheet's own label (047); `percentage` where it has none. */
+  basis: SchedulePricingBasis;
   headerRowNumber: number;
   columns: ScheduleColumns;
   /** Rows after the header, inside the block — candidates, not yet validated (FR-055). */
@@ -80,53 +85,98 @@ function matchColumn(
 export function identifySchedule(
   sheets: WorkbookSheet[],
 ): IdentifiedSchedule | null {
+  return identifySchedules(sheets)[0] ?? null;
+}
+
+/**
+ * Every schedule in the workbook, one per sheet, in sheet order (047).
+ *
+ * Until 047 the importer stopped at the first sheet with a header. Rajasthan e-procurement tenders
+ * put an item-rate schedule and a percentage schedule on `BoQ1` and `BoQ2` of one file, so a
+ * ₹97 lakh percentage schedule behind a ₹4.88 lakh item-rate one was simply never read.
+ */
+export function identifySchedules(
+  sheets: WorkbookSheet[],
+): IdentifiedSchedule[] {
+  const found: IdentifiedSchedule[] = [];
   for (const sheet of sheets) {
-    for (const row of sheet.rows) {
-      const description = matchColumn(row.cells, DESCRIPTION_PATTERNS);
-      const quantity = matchColumn(row.cells, QUANTITY_PATTERNS);
-      // Both, because either alone matches too much: "Description" appears in covering notes and
-      // "Quantity" appears in summary blocks that carry no items.
-      if (description === null || quantity === null) continue;
+    const schedule = scheduleOnSheet(sheet);
+    if (schedule) found.push(schedule);
+  }
+  return found;
+}
 
-      const unit = matchColumn(row.cells, UNIT_PATTERNS);
-      const rate = matchColumn(row.cells, RATE_PATTERNS);
-      if (unit === null || rate === null) continue;
-
-      const populated = row.cells
-        .map((cell, index) => (cell === null || cell === '' ? null : index))
-        .filter((index): index is number => index !== null);
-      const columns: ScheduleColumns = {
-        description,
-        quantity,
-        unit,
-        rate,
-        bidderRate: matchColumn(row.cells, BIDDER_RATE_PATTERNS),
-        amount: matchColumn(row.cells, AMOUNT_PATTERNS),
-        firstColumn: Math.min(...populated),
-        lastColumn: Math.max(...populated),
-      };
-
-      const after = sheet.rows
-        .filter((candidate) => candidate.rowNumber > row.rowNumber)
-        .map((candidate) => ({
-          rowNumber: candidate.rowNumber,
-          // Clipped to the block. Everything past `lastColumn` is another BOQ type's leftovers
-          // (FR-042) — excluded for being outside the span, not for sitting at a known position.
-          cells: candidate.cells.slice(0, columns.lastColumn + 1),
-        }));
-      const hasDescription = (candidate: WorkbookRow) => {
-        const description = candidate.cells[columns.description];
-        return typeof description === 'string' && description.trim().length > 0;
-      };
-
-      return {
-        sheetName: sheet.name,
-        headerRowNumber: row.rowNumber,
-        columns,
-        candidates: after.filter(hasDescription),
-        footer: after.filter((candidate) => !hasDescription(candidate)),
-      };
+/**
+ * Which way the schedule is priced, from the label rows above its header (047).
+ *
+ * The template says so twice — row 1 reads `Item Rate BoQ` or `Percentage BoQ`, and row 2 carries
+ * the type in its second cell. A sheet saying neither is `percentage`, which is what every import
+ * before 047 assumed, so an unlabelled workbook imports exactly as it always did.
+ */
+function basisOf(
+  sheet: WorkbookSheet,
+  headerRowNumber: number,
+): SchedulePricingBasis {
+  for (const row of sheet.rows) {
+    if (row.rowNumber >= headerRowNumber) break;
+    for (const cell of row.cells.slice(0, 3)) {
+      if (typeof cell !== 'string') continue;
+      const text = cell.replace(/\s+/g, ' ').trim();
+      // "Select, Excess (+), Less (-)" is the quote-direction instruction cell, not a type label.
+      if (/^item\s*rate(\s*boq)?$/i.test(text)) return 'item_rate';
+      if (/^percentage(\s*boq)?$/i.test(text)) return 'percentage';
     }
+  }
+  return 'percentage';
+}
+
+function scheduleOnSheet(sheet: WorkbookSheet): IdentifiedSchedule | null {
+  for (const row of sheet.rows) {
+    const description = matchColumn(row.cells, DESCRIPTION_PATTERNS);
+    const quantity = matchColumn(row.cells, QUANTITY_PATTERNS);
+    // Both, because either alone matches too much: "Description" appears in covering notes and
+    // "Quantity" appears in summary blocks that carry no items.
+    if (description === null || quantity === null) continue;
+
+    const unit = matchColumn(row.cells, UNIT_PATTERNS);
+    const rate = matchColumn(row.cells, RATE_PATTERNS);
+    if (unit === null || rate === null) continue;
+
+    const populated = row.cells
+      .map((cell, index) => (cell === null || cell === '' ? null : index))
+      .filter((index): index is number => index !== null);
+    const columns: ScheduleColumns = {
+      description,
+      quantity,
+      unit,
+      rate,
+      bidderRate: matchColumn(row.cells, BIDDER_RATE_PATTERNS),
+      amount: matchColumn(row.cells, AMOUNT_PATTERNS),
+      firstColumn: Math.min(...populated),
+      lastColumn: Math.max(...populated),
+    };
+
+    const after = sheet.rows
+      .filter((candidate) => candidate.rowNumber > row.rowNumber)
+      .map((candidate) => ({
+        rowNumber: candidate.rowNumber,
+        // Clipped to the block. Everything past `lastColumn` is another BOQ type's leftovers
+        // (FR-042) — excluded for being outside the span, not for sitting at a known position.
+        cells: candidate.cells.slice(0, columns.lastColumn + 1),
+      }));
+    const hasDescription = (candidate: WorkbookRow) => {
+      const description = candidate.cells[columns.description];
+      return typeof description === 'string' && description.trim().length > 0;
+    };
+
+    return {
+      sheetName: sheet.name,
+      basis: basisOf(sheet, row.rowNumber),
+      headerRowNumber: row.rowNumber,
+      columns,
+      candidates: after.filter(hasDescription),
+      footer: after.filter((candidate) => !hasDescription(candidate)),
+    };
   }
   return null;
 }

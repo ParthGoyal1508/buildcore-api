@@ -4,8 +4,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import {
+  AuditAction,
+  AuditEntityType,
+  BoqPricingBasis,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+
+import { AuditLogService } from '../../auth/audit-log.service';
 
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { BOQ_ERRORS } from './boq-error-codes';
@@ -48,6 +55,8 @@ export interface BoqItemView {
   isEstimate: boolean;
   /** Added on a bill to the client, outside the tendered BOQ (2026-10-14). Not measured by DWR. */
   nonBoq: boolean;
+  /** How the line is priced against the client (047) — see `takesQuotedPercentage`. */
+  pricingBasis: BoqPricingBasis;
   /** Exactly one of the five, always (FR-048). `onTrack` means no alert. */
   state: LineState;
 }
@@ -105,6 +114,7 @@ const ITEM_SELECT = {
   isVariation: true,
   isEstimate: true,
   nonBoq: true,
+  pricingBasis: true,
 } as const;
 
 /**
@@ -115,7 +125,72 @@ const ITEM_SELECT = {
  */
 @Injectable()
 export class BoqService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditLogService,
+  ) {}
+
+  /**
+   * Deletes a section that holds no lines (047).
+   *
+   * An import or a manual entry can leave an empty heading behind, and until 047 there was no way
+   * to remove it. A section **with** lines is refused rather than cascading them away: a line's
+   * own delete already checks every reference, and a group delete that skipped those checks would
+   * be a back door around them.
+   */
+  async deleteGroup(
+    ctx: RlsContext,
+    projectId: string,
+    groupId: string,
+    actor: { accountId: string; companyId: string; ipAddress: string },
+  ) {
+    const deleted = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const group = await tx.bOQTaskGroup.findFirst({
+        where: { id: groupId, projectId },
+        select: {
+          id: true,
+          boqNo: true,
+          name: true,
+          isEstimate: true,
+          _count: { select: { items: true } },
+        },
+      });
+      if (!group)
+        throw new NotFoundException('BOQ section not found on this project');
+      if (group._count.items > 0) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BOQ_ERRORS.groupNotEmpty,
+          message:
+            `Section ${group.boqNo} "${group.name}" still holds ${group._count.items} ` +
+            `${plural(
+              group._count.items,
+              'line',
+            )}. Delete or move its lines first — only an ` +
+            'empty section can be deleted.',
+        });
+      }
+      await tx.bOQTaskGroup.delete({ where: { id: groupId } });
+      return group;
+    });
+
+    // Principle IV: a delete is accountable.
+    await this.audit.record({
+      entityType: AuditEntityType.BOQ_GROUP,
+      action: AuditAction.DELETE,
+      entityId: groupId,
+      changes: {
+        projectId,
+        boqNo: deleted.boqNo,
+        name: deleted.name,
+        isEstimate: deleted.isEstimate,
+      },
+      accountId: actor.accountId,
+      companyId: actor.companyId,
+      ipAddress: actor.ipAddress,
+    });
+    return { id: groupId };
+  }
 
   async createGroup(
     ctx: RlsContext,
@@ -186,6 +261,8 @@ export class BoqService {
           perDayQty: input.perDayQty ?? null,
           isVariation: input.isVariation ?? false,
           variationRef: input.variationRef ?? null,
+          // 047: a line typed in by hand can be either kind; percentage unless said otherwise.
+          pricingBasis: input.pricingBasis ?? BoqPricingBasis.percentage,
         },
         select: { id: true, boqNo: true, taskName: true },
       });
@@ -437,10 +514,34 @@ export class BoqService {
         // line on another project. A line in another company is invisible to RLS, so both miss and
         // both answer 404 — never 403, which would confirm the row exists.
         where: { id: itemId, group: { projectId } },
-        select: ITEM_SELECT,
+        select: {
+          ...ITEM_SELECT,
+          _count: { select: { clientBillLines: true } },
+        },
       });
       if (!current)
         throw new NotFoundException('BOQ item not found on this project');
+
+      // 047: the basis decides whether a bill's quoted rate carries the percentage, and a bill's
+      // view reads it through the line. Changing it after billing would restate a sent bill.
+      if (
+        input.pricingBasis !== undefined &&
+        input.pricingBasis !== null &&
+        input.pricingBasis !== current.pricingBasis &&
+        current._count.clientBillLines > 0
+      ) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BOQ_ERRORS.pricingBasisLocked,
+          message:
+            `Line ${current.boqNo} is already on ${current._count.clientBillLines} client ` +
+            `${plural(
+              current._count.clientBillLines,
+              'bill',
+            )}, so how it is priced cannot ` +
+            'change — the bills were raised on the current basis.',
+        });
+      }
 
       const merged = {
         startDate:
@@ -488,6 +589,9 @@ export class BoqService {
           ...(input.duration !== undefined ? { duration: input.duration } : {}),
           ...(input.perDayQty !== undefined
             ? { perDayQty: input.perDayQty }
+            : {}),
+          ...(input.pricingBasis !== undefined && input.pricingBasis !== null
+            ? { pricingBasis: input.pricingBasis }
             : {}),
         },
         select: ITEM_SELECT,
@@ -563,6 +667,7 @@ type ItemRow = {
   isVariation: boolean;
   isEstimate: boolean;
   nonBoq: boolean;
+  pricingBasis: BoqPricingBasis;
 };
 
 const MS_PER_DAY = 86_400_000;
@@ -581,6 +686,7 @@ function viewOf(item: ItemRow, asOf: Date): BoqItemView {
     rate: item.rate.toFixed(2),
     isEstimate: item.isEstimate,
     nonBoq: item.nonBoq,
+    pricingBasis: item.pricingBasis,
     doneQty: item.doneQty.toFixed(3),
     pendingQty: pending.toFixed(3),
     perDayQty: item.perDayQty?.toFixed(3) ?? null,

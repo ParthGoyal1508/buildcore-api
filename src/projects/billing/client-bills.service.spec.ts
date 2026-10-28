@@ -20,6 +20,9 @@ interface ItemFixture {
   scopeQty: number;
   rate: number;
   isVariation?: boolean;
+  /** 047. Absent means `percentage`, the column's default. */
+  pricingBasis?: 'percentage' | 'item_rate';
+  nonBoq?: boolean;
 }
 
 function item(over: Partial<ItemFixture> = {}): ItemFixture {
@@ -55,6 +58,8 @@ function build(opts: {
     rate: dec(i.rate),
     isVariation: i.isVariation ?? false,
     variationRef: null,
+    pricingBasis: i.pricingBasis ?? 'percentage',
+    nonBoq: i.nonBoq ?? false,
     group: { id: 'grp-1', name: 'Earthwork' },
   });
 
@@ -789,5 +794,63 @@ describe('the breakdown behind a packaged bill’s net', () => {
 
     const view = await service.view(ctx, 'bill-1');
     expect(view.settlement).toBeNull();
+  });
+});
+
+describe('the pricing basis (047)', () => {
+  // NEWAI SHAHID SMARAK's shape: an item-rate schedule beside a percentage one at −19.12%.
+  const items = [
+    item({ id: 'pct', boqNo: 'BoQ2/1.01', rate: 229.5, scopeQty: 279.612 }),
+    item({
+      id: 'ir',
+      boqNo: 'BoQ1/1.01',
+      rate: 1490,
+      scopeQty: 200,
+      pricingBasis: 'item_rate',
+    }),
+  ];
+
+  it('bills an item-rate line at its own rate, and a percentage line with the quote', async () => {
+    const { service, created } = build({ items, quotedPercentage: -0.1912 });
+
+    await service.compose(
+      ctx,
+      'co-1',
+      compose({
+        lines: [
+          { boqTaskItemId: 'pct', quantity: 100 },
+          { boqTaskItemId: 'ir', quantity: 10 },
+        ],
+      }),
+    );
+
+    const lines = (
+      created[0].lines as {
+        create: { boqTaskItemId: string; amount: number }[];
+      }
+    ).create;
+    const amount = (id: string) =>
+      lines.find((line) => line.boqTaskItemId === id).amount;
+    expect(amount('ir')).toBe(14900); // 10 × 1490, no −19.12%
+    expect(amount('pct')).toBe(18561.96); // 100 × 229.5 × 0.8088
+  });
+
+  it('shows the quoted rate only where the quote applies', async () => {
+    const { service } = build({ items, quotedPercentage: -0.1912 });
+    const bill = await service.compose(
+      ctx,
+      'co-1',
+      compose({
+        lines: [
+          { boqTaskItemId: 'pct', quantity: 100 },
+          { boqTaskItemId: 'ir', quantity: 10 },
+        ],
+      }),
+    );
+    const view = await service.view(ctx, (bill as { id: string }).id);
+    const byId = new Map(view.lines.map((line) => [line.boqTaskItemId, line]));
+    expect(byId.get('ir').quotedRate).toBe(1490);
+    expect(byId.get('ir').pricingBasis).toBe('item_rate');
+    expect(byId.get('pct').quotedRate).toBeCloseTo(185.62, 2);
   });
 });

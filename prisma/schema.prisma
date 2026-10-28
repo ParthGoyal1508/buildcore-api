@@ -2122,6 +2122,15 @@ model BOQTaskItem {
   /// nothing for it and the quantity is the one entered on the bill.
   nonBoq Boolean @default(false)
 
+  /// How this line is priced against the client (047). `percentage` — the schedule rate with the
+  /// project's quoted percentage applied, which is what a "Percentage BoQ" tender means; `item_rate`
+  /// — the bidder's own rate, as quoted, with no percentage on top. A tender may carry both kinds
+  /// in separate schedules, and applying the quoted percentage to item-rate lines bills them wrong.
+  ///
+  /// Default `percentage`, so every line that existed before 047 prices exactly as it did.
+  /// Fixed once a client bill measures the line — see `BoqService.planItem`.
+  pricingBasis BoqPricingBasis @default(percentage)
+
   dwrTasks        DWRTask[]
   clientBillLines ClientBillLine[]
   awardLines      WorkOrderBOQItem[]
@@ -2131,6 +2140,14 @@ model BOQTaskItem {
 
   @@index([companyId])
   @@index([groupId])
+  @@schema("projects")
+}
+
+/// How a BOQ line is priced against the client (047) — see `BOQTaskItem.pricingBasis`.
+enum BoqPricingBasis {
+  percentage
+  item_rate
+
   @@schema("projects")
 }
 
