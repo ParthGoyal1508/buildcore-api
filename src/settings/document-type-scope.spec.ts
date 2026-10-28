@@ -50,11 +50,16 @@ describe('DocumentType scope backfill', () => {
     expect(all).toHaveLength(29);
     expect(new Set(all).size).toBe(29);
 
-    const declared = new Set([
-      ...EMPLOYEE_CODES,
-      ...REQUIRED_COMPANY_DOCUMENT_CODES,
-      ...REQUIRED_PROJECT_DOCUMENT_CODES,
-    ]);
+    // Kinds declared after that migration take their scope from `scopeForCode` at creation, so
+    // the backfill cannot name them (048 added AGREEMENT).
+    const declaredLater = new Set(['AGREEMENT']);
+    const declared = new Set(
+      [
+        ...EMPLOYEE_CODES,
+        ...REQUIRED_COMPANY_DOCUMENT_CODES,
+        ...REQUIRED_PROJECT_DOCUMENT_CODES,
+      ].filter((code) => !declaredLater.has(code)),
+    );
     expect(new Set(all)).toEqual(declared);
   });
 

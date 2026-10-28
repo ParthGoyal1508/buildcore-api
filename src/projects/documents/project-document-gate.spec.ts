@@ -14,7 +14,12 @@ const PDF_BYTES = Buffer.from('%PDF-1.4\n%%EOF\n');
 describe('ProjectDocumentsService — the gate and the upload path', () => {
   const harness = (opts: {
     staged?: Record<string, unknown>[];
-    requirements?: { documentTypeId: string; isMandatory: boolean }[];
+    requirements?: {
+      documentTypeId: string;
+      isMandatory: boolean;
+      forGovernment?: boolean;
+      forPrivate?: boolean;
+    }[];
     types?: { id: string; name: string; hasExpiry?: boolean }[];
     documents?: Record<string, unknown>[];
     /** Who the uploader ids resolve to (web T077). */
@@ -557,6 +562,67 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
       await expect(
         service.remove(ctx, CO, 'p-2', 'doc-old', 'u-1'),
       ).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  describe('the gate by project type (048)', () => {
+    const requirements = [
+      // LOI: government only.
+      {
+        documentTypeId: 't-loi',
+        isMandatory: true,
+        forGovernment: true,
+        forPrivate: false,
+      },
+      // Work order: both.
+      {
+        documentTypeId: 't-wo',
+        isMandatory: true,
+        forGovernment: true,
+        forPrivate: true,
+      },
+    ];
+    const types = [
+      { id: 't-loi', name: 'Letter of intent' },
+      { id: 't-wo', name: 'Work order' },
+    ];
+    const staged = [
+      {
+        id: 's-wo',
+        uploadedBy: 'u-1',
+        documentTypeId: 't-wo',
+        documentType: 'Work order',
+      },
+    ];
+
+    const refusal = async (sector: 'government' | 'private' | null) => {
+      const { service } = harness({ requirements, types, staged });
+      try {
+        await service.assertMandatoryKindsSatisfied(
+          ctx,
+          CO,
+          ['s-wo'],
+          'u-1',
+          sector as never,
+        );
+        return null;
+      } catch (error) {
+        return (
+          error as { getResponse(): { missingKinds: string[] } }
+        ).getResponse().missingKinds;
+      }
+    };
+
+    it('lets a private project in without the government-only LOI', async () => {
+      expect(await refusal('private')).toBeNull();
+    });
+
+    it('holds a government project to the LOI', async () => {
+      expect(await refusal('government')).toEqual(['Letter of intent']);
+    });
+
+    it('holds an untyped project to every kind, as before 048', async () => {
+      expect(await refusal(null)).toEqual(['Letter of intent']);
     });
   });
 });

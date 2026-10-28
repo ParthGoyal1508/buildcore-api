@@ -40,6 +40,22 @@ export class ProjectDocumentRequirementDto {
   @IsOptional()
   @IsBoolean()
   isMandatory?: boolean;
+
+  @ApiPropertyOptional({
+    default: true,
+    description: '048. Required of government projects. Omitted means true.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  forGovernment?: boolean;
+
+  @ApiPropertyOptional({
+    default: true,
+    description: '048. Required of private projects. Omitted means true.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  forPrivate?: boolean;
 }
 
 /**

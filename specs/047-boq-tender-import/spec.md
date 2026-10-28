@@ -55,6 +55,11 @@ would over- or under-bill every one.
 - Q: Where do the real tender files live in the repository? → A: `test/fixtures/tenders/`, **git-ignored** like `docs/`; the fixture-backed unit and e2e tests report as skipped (with the reason) when the folder is absent. (decided by implementer, 2026-10-28, the workbooks carry the client's bids, and publishing them to the remote was refused; this matches how `docs/BOQ_794578.xls` is already handled)
 - Q: Group delete — permission and lock? → A: Same as the other BOQ writes: `PROJECTS` permission and the project lock guard. A group holding any line is refused with `BOQ_GROUP_NOT_EMPTY`. (decided by implementer, 2026-10-28)
 
+### Session 2026-10-28 (follow-up, coordinator request — "Part A")
+
+- Q: Parth Realcon's own BOQ (Ganga Innova) is refused with `BOQ_NO_SCHEDULE_BLOCK` because its quantity column is headed "BOQ." — accept it? → A: Yes. A whole-cell "BOQ", "BOQ.", "BOQ Qty" or "BOQ Quantity" heading is a quantity heading. A lone "BOQ" title row can't be taken for the header, because a header row must still name a description, a unit and a rate. "BOQ No." is not a quantity. (decided by implementer, 2026-10-28)
+- Q: Those schedules end with "Total Amount" in the description column rather than "Total in Figures" in a footer — reconcile against it? → A: Yes. "Total Amount" counts as a stated-total label, read from the footer first and then from candidate rows, where it is excluded from the lines as a total row. Every Parth Realcon custom BOQ now reconciles against its own total. Ganga Innova: 9 lines, ₹64,80,000 = stated. All 36 BOQ workbooks on file still validate as confirmable. (decided by implementer, 2026-10-28)
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Import a mixed tender completely and price it correctly (Priority: P1)

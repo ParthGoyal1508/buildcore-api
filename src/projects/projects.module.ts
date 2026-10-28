@@ -40,6 +40,11 @@ import { ProjectsController } from './portfolio/projects.controller';
 import { ProjectSearchSource } from './portfolio/project-search.source';
 import { ProjectSourcesRegistry } from './portfolio/project-sources.registry';
 import { ClientBillsController } from './billing/client-bills.controller';
+import {
+  ClientHoldingsController,
+  ClientReceiptsController,
+} from './billing/client-receipts.controller';
+import { ClientReceiptsService } from './billing/client-receipts.service';
 import { ClientBillsService } from './billing/client-bills.service';
 import { RaBillsController } from './billing/ra-bills.controller';
 import { RaBillsService } from './billing/ra-bills.service';
@@ -99,6 +104,8 @@ import { ProjectLetterSource } from './portfolio/project-letter-source';
     // 018 US1 (`bugs.md` item 11). Bills measured against the BOQ, which is what makes Note 12's
     // "reconciliation against BOQ amounts and quantities" answerable at all.
     ClientBillsController,
+    ClientReceiptsController,
+    ClientHoldingsController,
     // 018 US2 (`bugs.md` item 12). Subcontractor bills measured against the award, which is a separate
     // set of rates from the client's BOQ — the margin between them is what the P&L shows.
     RaBillsController,
@@ -161,6 +168,7 @@ import { ProjectLetterSource } from './portfolio/project-letter-source';
     BankGuaranteesService,
     BankGuaranteeExpiryRule,
     ClientBillsService,
+    ClientReceiptsService,
     RaBillsService,
     // 018 US2. Feature 008 US6's surface, delivered in the smallest form that makes an RA bill
     // reachable — nothing had ever written to the `WorkOrder` table. See the service comment.
@@ -252,6 +260,8 @@ import { ProjectLetterSource } from './portfolio/project-letter-source';
     // screen. A second implementation of project revenue and cost would be two answers
     // to the same question, which is the one thing a report must never be.
     ProjectPnlService,
+    // 048: the client-holdings report reads the same figures the project screen shows.
+    ClientReceiptsService,
   ],
 })
 export class ProjectsModule {}

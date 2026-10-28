@@ -53,7 +53,18 @@ const DESCRIPTION_PATTERNS = [
   /description\s*of\s*(item|work)/i,
   /^particulars/i,
 ];
-const QUANTITY_PATTERNS = [/^qu?ant/i, /^qty/i];
+/**
+ * `BOQ.` / `BOQ Qty` / `BOQ Quantity` (048 Part A): Parth Realcon's own schedules head the quantity
+ * column with the schedule's name. Whole-cell matches only — `BOQ No.` is an item-number column,
+ * and a title row reading just "BOQ" never qualifies on its own because a header row must also
+ * name a description, a unit and a rate (see `scheduleOnSheet`).
+ */
+const QUANTITY_PATTERNS = [
+  /^qu?ant/i,
+  /^qty/i,
+  /^boq\.?$/i,
+  /^boq\.?\s*(qty|quantity)\.?$/i,
+];
 const UNIT_PATTERNS = [/^units?$/i, /^uom$/i];
 const RATE_PATTERNS = [/^rate$/i, /^estimated\s*rate/i, /^bsr\s*rate/i];
 const BIDDER_RATE_PATTERNS = [

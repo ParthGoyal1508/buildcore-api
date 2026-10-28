@@ -897,9 +897,10 @@ export class BoqImportService {
       .plus(roundingDrift)
       .toDecimalPlaces(2);
 
+    // `Total Amount` is how Parth Realcon's own schedules state theirs (048 Part A).
     const statedSchedule = this.statedTotal(
       schedule,
-      /total\s*in\s*figures|^total$/i,
+      /total\s*in\s*figures|^total(\s+amount)?$/i,
     );
     // An item-rate schedule's quoted row is the template's `Select` beside a 0 — not a figure.
     const statedQuoted =
@@ -1362,7 +1363,10 @@ export class BoqImportService {
     label: RegExp,
   ): Prisma.Decimal | null {
     if (schedule.columns.amount === null) return null;
-    for (const row of schedule.footer) {
+    // The footer first — a portal workbook's `Total in Figures` lives there. Then the candidate
+    // rows, because a hand-made schedule writes `Total Amount` in its description column, where
+    // it is excluded as a total row (047) and would otherwise state nothing at all (048 Part A).
+    for (const row of schedule.footer.concat(schedule.candidates)) {
       const first = String(
         row.cells.find((cell) => typeof cell === 'string' && cell.trim()) ?? '',
       );

@@ -70,6 +70,8 @@ export function kindOf(type: AuditEntityType): string {
     BOQ_GROUP: 'BOQ group',
     BOQ_ITEM: 'BOQ item',
     BOQ_IMPORT: 'BOQ import',
+    CLIENT_RECEIPT: 'client receipt',
+    CLIENT_HOLD_RELEASE: 'retention / CPBG release',
     RA_BILL: 'RA bill',
     BOCW_PAYMENT: 'BOCW payment',
     USER_ACCOUNT: 'user account',

@@ -29,7 +29,16 @@ export interface RequiredDocumentKind {
   needsNumber: boolean;
   /** Regulated personal data (FR-024). True for Aadhaar and nothing else. */
   isRestricted?: boolean;
+  /**
+   * Which project types the kind is required of by default (048). Project kinds only; omitted
+   * means both. Only shapes the shipped default set — a company's own configuration says
+   * `forGovernment` / `forPrivate` per row.
+   */
+  appliesTo?: ProjectSectorCode[];
 }
+
+/** `ProjectSector`'s values, kept free of the Prisma client so this file stays a plain list. */
+export type ProjectSectorCode = 'government' | 'private';
 
 /**
  * The eight statutory papers FR-002 names.
@@ -88,10 +97,16 @@ export const REQUIRED_COMPANY_DOCUMENT_KINDS: RequiredDocumentKind[] = [
 ];
 
 /**
- * The six project papers FR-007 names.
+ * The project papers FR-007 names, and which project types each is required of (048).
  *
  * Declared here beside the company set because they answer the same question in a
  * different scope, and splitting them across two files is how the two drift.
+ *
+ * **Government vs private (048).** A government contract arrives as an LOA/LOI, is signed as an
+ * agreement, and on a road or quarry job needs a mining permission; a private client issues a work
+ * order or purchase order and that is the contract. Both need the work order, the BOQ and both
+ * insurances. The performance guarantee (PBG/CPBG) is not here: it is kept in the bank-guarantee
+ * register (037), which already holds the instrument, its expiry and its documents.
  */
 export const REQUIRED_PROJECT_DOCUMENT_KINDS: RequiredDocumentKind[] = [
   {
@@ -99,6 +114,7 @@ export const REQUIRED_PROJECT_DOCUMENT_KINDS: RequiredDocumentKind[] = [
     label: 'Letter of intent',
     hasExpiry: false,
     needsNumber: true,
+    appliesTo: ['government'],
   },
   {
     code: 'WORK_ORDER',
@@ -112,6 +128,7 @@ export const REQUIRED_PROJECT_DOCUMENT_KINDS: RequiredDocumentKind[] = [
     label: 'Mining permission',
     hasExpiry: true,
     needsNumber: true,
+    appliesTo: ['government'],
   },
   {
     code: 'LABOUR_INSURANCE',
@@ -125,7 +142,25 @@ export const REQUIRED_PROJECT_DOCUMENT_KINDS: RequiredDocumentKind[] = [
     hasExpiry: false,
     needsNumber: false,
   },
+  // 048. Declared after the 2026-09-16 scope backfill, so its DocumentType rows get their scope
+  // from `scopeForCode` when they are created — see `document-type-scope.spec.ts`.
+  {
+    code: 'AGREEMENT',
+    label: 'Contract agreement',
+    hasExpiry: false,
+    needsNumber: true,
+    appliesTo: ['government'],
+  },
 ];
+
+/** Whether a declared project kind is required of this project type by default (048). */
+export function kindAppliesTo(
+  kind: RequiredDocumentKind,
+  sector: ProjectSectorCode | null,
+): boolean {
+  if (sector === null || !kind.appliesTo) return true;
+  return kind.appliesTo.includes(sector);
+}
 
 /** Codes only, for the `IN` clause that drives completeness in one query (FR-003). */
 export const REQUIRED_COMPANY_DOCUMENT_CODES: string[] =

@@ -214,6 +214,15 @@ if (!PRESENT) {
     expect(report.confirmable).toBe(true);
   });
 
+  it('Ganga Innova — a "BOQ." quantity heading and a "Total Amount" row (048 Part A)', async () => {
+    const report = await validate('GANGA_INNOVA_BOQ.xlsx');
+    expect(report.lines).toBe(9);
+    expect(report.groups).toBe(3);
+    expect(report.totals.scheduleDerived).toBe('6480000.00');
+    expect(report.totals.scheduleStated).toBe('6480000.00');
+    expect(report.confirmable).toBe(true);
+  });
+
   it('blocks a schedule whose stated total disagrees, and issues no batch', async () => {
     // NEWAI with BoQ2's "Total in Figures" raised by ₹1,000 — the shape of a misread row.
     const real = new BoqWorkbookReader();
