@@ -6573,6 +6573,14 @@ model Item {
   /// two years ago still resolves its item name.
   active Boolean @default(true)
 
+  /// 050: the price moves day to day (diesel, cement). Its rate is kept as dated history in
+  /// `inventory.ItemDailyRate` and offered on purchases, POs and fuel entries for their date;
+  /// purchases of it are not locked to a vendor's agreed rate (028 FR-013).
+  dailyRate   Boolean @default(false)
+  /// 050: the fuel machines draw — what a Machinery fuel entry's rate is offered from. At most one
+  /// per company, and always a daily-rate item.
+  machineFuel Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -6999,6 +7007,40 @@ model VendorItemRate {
   @@index([companyId])
   /// FR-016: what *other* vendors have agreed for this item, shown beside a first entry.
   @@index([companyId, itemId])
+  @@schema("inventory")
+}
+
+/// 050: the dated rate of a daily-rate item (diesel, cement) — "rates change on a day basis".
+///
+/// One row per day the rate changed. `vendorId` null is the **market rate**, the company-wide
+/// price everyone is assumed to charge; a row with a vendor is that vendor's **override**. The rate
+/// in force on a date is the latest row on or before it, and between a vendor's override and the
+/// market, the more recent wins — so updating the market rate today moves every vendor who has no
+/// override of today. Never rewrites a purchase, PO or fuel entry already recorded: those carry
+/// their own rate, and this only offers one.
+///
+/// At most one row per (company, item, vendor-or-market, day): two partial unique indexes in the
+/// migration, because Prisma 5 cannot declare a unique key over a nullable column that treats null
+/// as one value.
+model ItemDailyRate {
+  id String @id @default(cuid())
+
+  companyId String
+
+  /// `settings.Item.id`, plain — Principle I, as `VendorItemRate.itemId`.
+  itemId   String
+  /// `partners.Vendor.id`, plain. Null means the market rate.
+  vendorId String?
+
+  rate          Decimal  @db.Decimal(18, 2)
+  effectiveFrom DateTime @db.Date
+
+  setByUserId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, itemId, effectiveFrom])
   @@schema("inventory")
 }
 

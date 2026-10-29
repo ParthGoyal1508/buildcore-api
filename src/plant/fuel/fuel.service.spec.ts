@@ -129,6 +129,8 @@ describe('FuelService.create — what may be booked (036 K1, K10)', () => {
       { record: jest.fn() } as never,
       refs as never,
       { emit: jest.fn() } as never,
+      {} as never,
+      {} as never,
     );
     return { service, prisma, refs };
   };

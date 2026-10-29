@@ -4,12 +4,21 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AuditAction, AuditEntityType, CodeSeriesType } from '@prisma/client';
+import {
+  AuditAction,
+  AuditEntityType,
+  CodeSeriesType,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
-import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import {
+  RlsContext,
+  rlsContextFor,
+  withRlsContext,
+} from '../../common/prisma/rls-context';
 import {
   DEFAULT_PAGE_SIZE,
   ITEM_CODE_INFIX,
@@ -32,6 +41,10 @@ export interface ItemView {
   hsnCode: string | null;
   description: string | null;
   active: boolean;
+  /** 050: the rate changes day to day. */
+  dailyRate: boolean;
+  /** 050: the fuel machines draw. */
+  machineFuel: boolean;
   createdAt: Date;
 }
 
@@ -74,6 +87,8 @@ export class ItemsService {
     hsnCode: string | null;
     description: string | null;
     active: boolean;
+    dailyRate: boolean;
+    machineFuel: boolean;
     createdAt: Date;
   }): ItemView {
     return {
@@ -91,6 +106,8 @@ export class ItemsService {
       hsnCode: row.hsnCode,
       description: row.description,
       active: row.active,
+      dailyRate: row.dailyRate,
+      machineFuel: row.machineFuel,
       createdAt: row.createdAt,
     };
   }
@@ -153,12 +170,16 @@ export class ItemsService {
 
   private whereFor(
     caller: AuthenticatedUser,
-    query: Pick<ListItemsDto, 'search' | 'categoryId' | 'companyId' | 'active'>,
+    query: Pick<
+      ListItemsDto,
+      'search' | 'categoryId' | 'companyId' | 'active' | 'dailyRate'
+    >,
   ) {
     return {
       ...companyScope(caller, query.companyId),
       ...(query.categoryId ? { categoryId: query.categoryId } : {}),
       ...(query.active !== undefined ? { active: query.active } : {}),
+      ...(query.dailyRate !== undefined ? { dailyRate: query.dailyRate } : {}),
       ...(query.search
         ? {
             OR: [
@@ -290,6 +311,9 @@ export class ItemsService {
           ITEM_CODE_INFIX,
         );
 
+        if (dto.machineFuel) {
+          await this.clearMachineFuel(tx, targetCompanyId);
+        }
         return tx.item.create({
           data: {
             companyId: targetCompanyId,
@@ -300,6 +324,9 @@ export class ItemsService {
             reorderLevel: dto.reorderLevel ?? null,
             hsnCode: dto.hsnCode?.trim() || null,
             description: dto.description?.trim() || null,
+            // A machine fuel is always a daily-rate item (050).
+            dailyRate: Boolean(dto.dailyRate || dto.machineFuel),
+            machineFuel: Boolean(dto.machineFuel),
           },
           include: { category: { select: { name: true } } },
         });
@@ -358,9 +385,27 @@ export class ItemsService {
           }
         }
 
+        // 050: one machine fuel per company, and it is always a daily-rate item; an item that stops
+        // changing daily stops being the fuel.
+        if (dto.machineFuel) {
+          await this.clearMachineFuel(tx, existing.companyId, id);
+        }
+        const dailyRate =
+          dto.machineFuel === true
+            ? true
+            : dto.dailyRate !== undefined
+            ? dto.dailyRate
+            : undefined;
+        const machineFuel =
+          dto.dailyRate === false && dto.machineFuel === undefined
+            ? false
+            : dto.machineFuel;
+
         return tx.item.update({
           where: { id },
           data: {
+            ...(dailyRate !== undefined ? { dailyRate } : {}),
+            ...(machineFuel !== undefined ? { machineFuel } : {}),
             ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
             ...(dto.categoryId !== undefined
               ? { categoryId: dto.categoryId }
@@ -386,12 +431,69 @@ export class ItemsService {
       entityType: AuditEntityType.ITEM,
       action: AuditAction.UPDATE,
       entityId: id,
-      changes: { after: { name: updated.name, active: updated.active } },
+      changes: {
+        after: {
+          name: updated.name,
+          active: updated.active,
+          dailyRate: updated.dailyRate,
+          machineFuel: updated.machineFuel,
+        },
+      },
       accountId: caller.id,
       companyId: updated.companyId,
       ipAddress,
     });
     return this.toView(updated);
+  }
+
+  /** 050: at most one machine fuel per company — marking one unmarks the rest. */
+  private async clearMachineFuel(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    exceptId?: string,
+  ): Promise<void> {
+    await tx.item.updateMany({
+      where: {
+        companyId,
+        machineFuel: true,
+        ...(exceptId ? { id: { not: exceptId } } : {}),
+      },
+      data: { machineFuel: false },
+    });
+  }
+
+  /**
+   * The company's machine fuel item, if one is marked (050) — what a Machinery fuel entry's rate is
+   * offered from. Null when none is marked, so the fuel form simply offers nothing.
+   */
+  async machineFuelItem(
+    ctx: RlsContext,
+    companyId: string,
+  ): Promise<{ id: string; name: string; code: string } | null> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.item.findFirst({
+        where: { companyId, machineFuel: true, active: true },
+        select: { id: true, name: true, code: true },
+      }),
+    );
+  }
+
+  /**
+   * The company's active daily-rate items (050), for Update today's rates. Unpaginated: these are a
+   * handful of commodities, not the item master.
+   */
+  async dailyRateItems(
+    caller: AuthenticatedUser,
+    companyId: string,
+  ): Promise<ItemView[]> {
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
+      const rows = await tx.item.findMany({
+        where: { companyId, dailyRate: true, active: true },
+        include: { category: { select: { name: true } } },
+        orderBy: { name: 'asc' },
+      });
+      return rows.map((row) => this.toView(row));
+    });
   }
 
   /**
