@@ -69,6 +69,15 @@ export const REMINDABLE_STATUSES: readonly AssetStatus[] = [
   AssetStatus.under_repair,
 ];
 
+/**
+ * Whether an asset in this status may raise an alert — expiring paperwork, an inspection due
+ * (049, 2026-10-29). Until 049 `REMINDABLE_STATUSES` was declared and tested but read by nothing,
+ * so a scrapped asset's lapsing insurance still lit the register's alert column.
+ */
+export function isRemindable(status: AssetStatus): boolean {
+  return REMINDABLE_STATUSES.includes(status);
+}
+
 /** Whether a move is on the machine. A no-op move (`from === to`) is allowed, so a
  * caller re-applying the same status is idempotent rather than an error. */
 export function canTransition(from: AssetStatus, to: AssetStatus): boolean {
