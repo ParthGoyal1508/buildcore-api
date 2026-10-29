@@ -13,7 +13,16 @@ import {
   REGISTRATION_PAPERS,
   SERVICE_DUE_SOON_MARGIN,
 } from '../constants/plant.constants';
+import { DISPOSED_STATUSES } from '../disposal/in-service';
 import { paperOfDocType } from '../equipment/equipment.service';
+
+/**
+ * Only machines the company still has are reminded about (049, 2026-10-29). A scrapped or sold
+ * machine's lapsing insurance or overdue service is not a task. Applied in each rule's query, so a
+ * reversed disposal — which puts the machine back to its previous status — is reminded about again
+ * on the next evaluation, with nothing to restore.
+ */
+const IN_SERVICE = { status: { notIn: DISPOSED_STATUSES } };
 
 /** How far back the service-due rule looks to estimate a machine's daily usage. */
 const USAGE_WINDOW_DAYS = 30;
@@ -64,7 +73,10 @@ export class EquipmentDocumentExpiryRule implements ReminderRuleProvider {
 
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const documents = await tx.equipmentDocument.findMany({
-        where: { expiresAt: { not: null, lte: horizon } },
+        where: {
+          expiresAt: { not: null, lte: horizon },
+          equipment: IN_SERVICE,
+        },
         include: {
           equipment: {
             select: {
@@ -176,7 +188,11 @@ export class EquipmentRegistrationExpiryRule implements ReminderRuleProvider {
     const horizon = new Date(Date.now() + this.leadDays * MS_PER_DAY);
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const papers = await tx.equipmentRegistrationItem.findMany({
-        where: { status: 'held', expiresAt: { not: null, lte: horizon } },
+        where: {
+          status: 'held',
+          expiresAt: { not: null, lte: horizon },
+          equipment: IN_SERVICE,
+        },
         include: {
           equipment: {
             select: { code: true, name: true, registrationNo: true },
@@ -240,6 +256,7 @@ export class EquipmentServiceDueRule implements ReminderRuleProvider {
   async evaluate(ctx: RlsContext): Promise<ReminderCandidate[]> {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const schedules = await tx.serviceSchedule.findMany({
+        where: { equipment: IN_SERVICE },
         include: {
           equipment: {
             select: {

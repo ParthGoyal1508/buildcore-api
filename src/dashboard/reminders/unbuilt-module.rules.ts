@@ -77,7 +77,13 @@ abstract class PendingModuleRule implements ReminderRuleProvider {
 // and are discovered from `PlantModule`'s own providers array. Leaving the
 // placeholders behind would double-report each rule as both available and pending.
 
-/** Feature 012's asset document expiry (FR-036). */
+/**
+ * Feature 012's asset document expiry (FR-036).
+ *
+ * When this and the inspection rule are built, their queries MUST keep to
+ * `REMINDABLE_STATUSES` (`src/assets/asset-status.ts`): a scrapped asset raises no reminder (049).
+ * The register's alert flags already do.
+ */
 @ReminderRule()
 export class AssetDocumentExpiryRule extends PendingModuleRule {
   readonly ruleKey = 'project-assets-document-expiry';

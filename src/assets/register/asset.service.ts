@@ -34,7 +34,11 @@ import {
   companyScope,
   effectiveCompanyId,
 } from '../../settings/company-scope';
-import { assertTransition } from '../asset-status';
+import {
+  assertTransition,
+  isRemindable,
+  REMINDABLE_STATUSES,
+} from '../asset-status';
 import { AssetsRefsService } from '../assets-refs.service';
 import { todayUtc } from '../dates';
 import {
@@ -278,12 +282,16 @@ export class AssetService {
       // Each document against its *own* type's window, never a module-wide constant:
       // an insurance policy and a calibration certificate are not renewed on the
       // same notice, which is why `alertDays` is a column on the doc type.
-      const alerting = row.documents.filter((document) =>
-        this.isExpiring(
-          document.expiryDate,
-          docTypes.get(document.docTypeId)?.alertDays ?? 0,
-          today,
-        ),
+      // A scrapped asset raises no alert (049, spec FR-027's `REMINDABLE_STATUSES`).
+      const remindable = isRemindable(row.status);
+      const alerting = row.documents.filter(
+        (document) =>
+          remindable &&
+          this.isExpiring(
+            document.expiryDate,
+            docTypes.get(document.docTypeId)?.alertDays ?? 0,
+            today,
+          ),
       );
       const depreciable = {
         purchaseCost: Number(row.purchaseCost),
@@ -332,7 +340,9 @@ export class AssetService {
         status: row.status,
         nextInspectionDue: row.nextInspectionDue,
         inspectionDue:
-          row.nextInspectionDue !== null && row.nextInspectionDue <= today,
+          remindable &&
+          row.nextInspectionDue !== null &&
+          row.nextInspectionDue <= today,
         expiryAlert: alerting.length > 0,
         alertDocumentTypes: [
           ...new Set(
@@ -372,8 +382,13 @@ export class AssetService {
       ...(query.siteId ? { currentSiteId: query.siteId } : {}),
       ...(query.custodianId ? { currentCustodianId: query.custodianId } : {}),
       ...(query.status ? { status: query.status } : {}),
+      // "Inspection due" never lists a scrapped asset (049). Under `AND` so it narrows a `status`
+      // filter rather than replacing it: scrapped + inspection due is an empty list.
       ...(query.inspectionDue
-        ? { nextInspectionDue: { not: null, lte: todayUtc() } }
+        ? {
+            nextInspectionDue: { not: null, lte: todayUtc() },
+            AND: [{ status: { in: [...REMINDABLE_STATUSES] } }],
+          }
         : {}),
       ...(query.search
         ? {
@@ -450,11 +465,14 @@ export class AssetService {
           documentNumber: document.documentNumber,
           issueDate: document.issueDate,
           expiryDate: document.expiryDate,
-          expiring: this.isExpiring(
-            document.expiryDate,
-            docType?.alertDays ?? 0,
-            today,
-          ),
+          // No "expiring" on a scrapped asset (049); `expired` stays, as a fact.
+          expiring:
+            isRemindable(row.status) &&
+            this.isExpiring(
+              document.expiryDate,
+              docType?.alertDays ?? 0,
+              today,
+            ),
           expired: document.expiryDate !== null && document.expiryDate < today,
           uploadedAt: document.uploadedAt,
         };

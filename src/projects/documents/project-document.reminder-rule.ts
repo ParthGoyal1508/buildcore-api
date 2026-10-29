@@ -11,6 +11,7 @@ import {
   ReminderSeverityLadder,
 } from '../../dashboard/reminders/reminder-rule.types';
 import { DocumentTypesService } from '../../settings/reference-data/document-types.service';
+import { UNREMINDED_PROJECT_STATUSES } from '../constants/projects.constants';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -59,7 +60,12 @@ export class ProjectDocumentExpiryRule implements ReminderRuleProvider {
 
     const documents = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.projectDocument.findMany({
-        where: { expiresAt: { not: null, lte: horizon } },
+        where: {
+          expiresAt: { not: null, lte: horizon },
+          // A completed project's papers are not chased (049). Read on every evaluation, so a
+          // project reopened tomorrow is reminded about again tomorrow.
+          project: { status: { notIn: UNREMINDED_PROJECT_STATUSES } },
+        },
         select: {
           id: true,
           companyId: true,

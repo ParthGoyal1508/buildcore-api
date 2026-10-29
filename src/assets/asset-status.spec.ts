@@ -5,6 +5,7 @@ import {
   assertTransition,
   AVAILABLE_STATUSES,
   canTransition,
+  isRemindable,
   REMINDABLE_STATUSES,
 } from './asset-status';
 
@@ -86,6 +87,13 @@ describe('assertTransition', () => {
 describe('status sets', () => {
   it('only allocates from idle', () => {
     expect([...AVAILABLE_STATUSES]).toEqual([AssetStatus.idle]);
+  });
+
+  it('isRemindable reads REMINDABLE_STATUSES (049)', () => {
+    expect(isRemindable(AssetStatus.scrapped)).toBe(false);
+    for (const status of REMINDABLE_STATUSES) {
+      expect(isRemindable(status)).toBe(true);
+    }
   });
 
   it('never reminds about a scrapped asset (FR-027)', () => {

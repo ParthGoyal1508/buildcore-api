@@ -377,11 +377,10 @@ export class EquipmentService {
           docTypeName: docType?.name ?? 'Unknown type',
           fileName: document.fileName,
           expiresAt: document.expiresAt,
-          expiring: this.isExpiring(
-            document.expiresAt,
-            docType?.alertDays ?? 0,
-            today,
-          ),
+          // No "expiring soon" on a disposed machine (049); `expired` stays, as a fact.
+          expiring:
+            !DISPOSED_STATUSES.includes(found.equipment.status) &&
+            this.isExpiring(document.expiresAt, docType?.alertDays ?? 0, today),
           expired: document.expiresAt !== null && document.expiresAt < today,
           uploadedAt: document.uploadedAt,
         };
@@ -455,7 +454,11 @@ export class EquipmentService {
     const today = startOfToday();
 
     return rows.map((row) => {
+      // A scrapped or sold machine raises no expiry alert (049): its papers are history. The
+      // dates stay on the record; only the flag that asks someone to act is withheld.
+      const inService = !DISPOSED_STATUSES.includes(row.status);
       const lapsingPapers = row.registration.flatMap((item) =>
+        inService &&
         item.status === RegistrationStatus.held &&
         item.expiresAt &&
         this.isExpiring(item.expiresAt, PAPER_ALERT_DAYS, today)
@@ -465,12 +468,14 @@ export class EquipmentService {
             ]
           : [],
       );
-      const alerting = row.documents.filter((document) =>
-        this.isExpiring(
-          document.expiresAt,
-          docTypes.get(document.docTypeId)?.alertDays ?? 0,
-          today,
-        ),
+      const alerting = row.documents.filter(
+        (document) =>
+          inService &&
+          this.isExpiring(
+            document.expiresAt,
+            docTypes.get(document.docTypeId)?.alertDays ?? 0,
+            today,
+          ),
       );
       return {
         id: row.id,
