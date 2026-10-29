@@ -139,3 +139,24 @@ export class FuelSummaryDto {
   @MaxLength(100)
   companyId?: string;
 }
+
+/** 050: the diesel rate a fuel entry on this date is offered. */
+export class FuelRateQueryDto {
+  @ApiProperty({ description: 'YYYY-MM-DD — the fuel entry date' })
+  @IsISO8601()
+  date!: string;
+
+  @ApiPropertyOptional({ description: 'The pump, for its own override' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  vendorId?: string;
+
+  @ApiPropertyOptional({
+    description: "The machine — its company's fuel is the one offered",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  equipmentId?: string;
+}

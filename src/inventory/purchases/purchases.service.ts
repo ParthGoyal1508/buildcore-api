@@ -227,6 +227,12 @@ interface ReceiptTerms {
   date: Date;
   indentLineId: string | null;
   purchaseOrderLineId: string | null;
+  /**
+   * 050: the item's price changes day to day (diesel, cement). Its purchases are offered the rate of
+   * their date and keep what was paid; the 028 agreed-rate lock does not apply, and no agreed rate is
+   * established from them — a lock on a price that moves daily refused every purchase after the first.
+   */
+  dailyRate: boolean;
 }
 
 /** The GRN form's fields, with the vehicle number already normalised by the caller. */
@@ -320,6 +326,7 @@ export class PurchasesService {
       date,
       indentLineId: dto.indentLineId ?? null,
       purchaseOrderLineId: dto.purchaseOrderLineId ?? null,
+      dailyRate: item.dailyRate,
     };
 
     const created = await withRlsContext(
@@ -479,6 +486,7 @@ export class PurchasesService {
       date,
       indentLineId: dto.indentLineId ?? null,
       purchaseOrderLineId: dto.purchaseOrderLineId ?? null,
+      dailyRate: item.dailyRate,
     };
 
     const completed = await withRlsContext(
@@ -578,12 +586,15 @@ export class PurchasesService {
     // read and the write. A pair with an agreed rate must match it; a pair with none establishes one
     // in `postReceipt`. A known item from a vendor who has not supplied it before has no agreed
     // rate, so it is a first purchase — the contract is per vendor.
-    const agreed = await this.rates.currentFor(
-      tx,
-      terms.companyId,
-      terms.vendorId,
-      terms.itemId,
-    );
+    // A daily-rate item (050) is bought at the day's price, not a contract: no lock, no agreed rate.
+    const agreed = terms.dailyRate
+      ? null
+      : await this.rates.currentFor(
+          tx,
+          terms.companyId,
+          terms.vendorId,
+          terms.itemId,
+        );
     this.rates.assertMatchesAgreed(agreed, terms.rate);
 
     // Received against a PO line, the line caps it — same item, the PO's vendor, and no more than is
@@ -615,7 +626,7 @@ export class PurchasesService {
     // The first purchase of a pair is what establishes the agreed rate (FR-012). Recorded after the
     // row exists, so the rate points at the purchase that set it — which is what makes FR-016's
     // first-purchase report answerable without inferring it from dates.
-    if (!options.agreed) {
+    if (!options.agreed && !terms.dailyRate) {
       await this.rates.establish(tx, {
         companyId: terms.companyId,
         vendorId: terms.vendorId,

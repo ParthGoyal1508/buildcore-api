@@ -22,6 +22,7 @@ import { ExportThrottle } from '../../common/throttle/app-throttle';
 import { allPages, ddmmyyyy, sendListXlsx } from '../list-export';
 import {
   CreateFuelEntryDto,
+  FuelRateQueryDto,
   FuelSummaryDto,
   ListFuelDto,
 } from './dto/fuel.dto';
@@ -45,6 +46,18 @@ export class FuelController {
     @Query() query: FuelSummaryDto,
   ) {
     return this.fuel.getMonthlySummary(caller, query);
+  }
+
+  @Get('rate')
+  @ApiOperation({
+    summary:
+      "050: the diesel rate offered for a fuel entry's date (the machine fuel item's daily rate)",
+  })
+  async rate(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query() query: FuelRateQueryDto,
+  ) {
+    return this.fuel.offeredRate(caller, query);
   }
 
   @Get('export.xlsx')

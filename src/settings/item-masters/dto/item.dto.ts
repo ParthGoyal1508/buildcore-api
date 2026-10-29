@@ -55,6 +55,24 @@ export class CreateItemDto {
   @IsString()
   @MaxLength(500)
   description?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "050: the price changes day to day (diesel, cement). Listed on Update today's rates; purchases " +
+      "are offered the rate of their date and are not locked to a vendor's agreed rate.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  dailyRate?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      "050: the fuel machines draw — a Machinery fuel entry's rate is offered from this item's " +
+      'daily rate. Implies `dailyRate`; setting it clears it on any other item of the company.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  machineFuel?: boolean;
 }
 
 /**
@@ -95,6 +113,14 @@ export class ListItemsDto {
   @BooleanQuery()
   @IsBoolean()
   active?: boolean;
+
+  @ApiPropertyOptional({
+    description: '050: only items whose rate changes daily',
+  })
+  @IsOptional()
+  @BooleanQuery()
+  @IsBoolean()
+  dailyRate?: boolean;
 
   @ApiPropertyOptional({ default: 1 })
   @IsOptional()

@@ -9,11 +9,18 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { businessToday } from '../../common/business-date';
-import { assertInScope, companyScope } from '../../settings/company-scope';
+import { DailyRatesService } from '../../inventory/rates/daily-rates.service';
+import {
+  assertInScope,
+  companyScope,
+  effectiveCompanyId,
+} from '../../settings/company-scope';
+import { ItemsService } from '../../settings/item-masters/items.service';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants/plant.constants';
 import { PlantRefsService } from '../plant-refs.service';
 import {
   CreateFuelEntryDto,
+  FuelRateQueryDto,
   FuelSummaryDto,
   ListFuelDto,
 } from './dto/fuel.dto';
@@ -169,7 +176,65 @@ export class FuelService {
     private readonly auditLog: AuditLogService,
     private readonly refs: PlantRefsService,
     private readonly events: EventEmitter2,
+    private readonly items: ItemsService,
+    private readonly dailyRates: DailyRatesService,
   ) {}
+
+  /**
+   * The diesel rate a fuel entry on `date` is offered (050): the daily rate of the company's machine
+   * fuel item, the pump's override if it has a newer one. `rate: null` when no item is marked as
+   * machine fuel or it has no rate yet — the form then asks for one as before. Never applied by the
+   * server: the entry stores what the person typed, and entries already recorded are not touched.
+   */
+  async offeredRate(
+    caller: AuthenticatedUser,
+    query: FuelRateQueryDto,
+  ): Promise<{
+    itemId: string | null;
+    itemName: string | null;
+    rate: number | null;
+    effectiveFrom: string | null;
+    source: 'market' | 'vendor' | null;
+  }> {
+    const none = {
+      itemId: null,
+      itemName: null,
+      rate: null,
+      effectiveFrom: null,
+      source: null,
+    };
+    const ctx = rlsContextFor(caller);
+    let companyId = effectiveCompanyId(caller);
+    if (query.equipmentId) {
+      const equipment = await withRlsContext(this.prisma, ctx, (tx) =>
+        tx.equipment.findUnique({
+          where: { id: query.equipmentId },
+          select: { companyId: true },
+        }),
+      );
+      if (!equipment) return none;
+      assertInScope(caller, equipment, 'Equipment');
+      companyId = equipment.companyId;
+    }
+    if (!companyId) return none;
+
+    const fuel = await this.items.machineFuelItem(ctx, companyId);
+    if (!fuel) return none;
+    const found = await this.dailyRates.effective(
+      ctx,
+      companyId,
+      fuel.id,
+      query.vendorId ?? null,
+      query.date.slice(0, 10),
+    );
+    return {
+      itemId: fuel.id,
+      itemName: fuel.name,
+      rate: found?.rate ?? null,
+      effectiveFrom: found?.effectiveFrom ?? null,
+      source: found?.source ?? null,
+    };
+  }
 
   async findAll(
     caller: AuthenticatedUser,
