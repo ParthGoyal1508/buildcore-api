@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import {
   ProjectDivision,
+  ProjectSector,
   ProjectSiteType,
   ProjectStatus,
 } from '@prisma/client';
@@ -121,7 +122,20 @@ export class CreateProjectDto {
   @IsEnum(ProjectDivision)
   division?: ProjectDivision;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    enum: ProjectSector,
+    nullable: true,
+    description:
+      '048. Government or private. Decides which document kinds the project must hold. ' +
+      'Omitted or null: held to every kind, as before project types existed.',
+  })
+  @IsOptional()
+  @IsEnum(ProjectSector)
+  sector?: ProjectSector | null;
+
+  @ApiPropertyOptional({
+    description: 'The department or authority (PWD, NHAI). Free text.',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(200)
@@ -194,6 +208,22 @@ export class CreateProjectDto {
   @Min(0)
   @Max(1)
   clientRetentionFraction?: number;
+
+  @ApiPropertyOptional({
+    description:
+      '048. The client CPBG term as a fraction — `0.05` is 5%. The contract performance bank ' +
+      'guarantee the client deducts from payments until a PBG is submitted. Only pre-fills a ' +
+      "receipt's CPBG deduction. Null clears it.",
+    minimum: 0,
+    maximum: 1,
+    nullable: true,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(0)
+  @Max(1)
+  clientCpbgFraction?: number | null;
 
   @ApiPropertyOptional()
   @IsOptional()

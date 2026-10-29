@@ -1560,6 +1560,10 @@ enum AuditEntityType {
   /// logged one entry per row would put 231 entries in the log and bury whatever came next. The
   /// entry carries the batch, the counts and whether the quoted percentage was set.
   BOQ_IMPORT
+  /// A client payment received against a bill, with what the client held back (048).
+  CLIENT_RECEIPT
+  /// Retention released or CPBG refunded by a client (048).
+  CLIENT_HOLD_RELEASE
   DWR
   REVENUE
   RA_BILL
@@ -1965,6 +1969,13 @@ model Project {
   projectManagerEmployeeId String?
 
   division       ProjectDivision @default(contract)
+  /// **Government or private** — who the client is (048). Decides which document kinds the project
+  /// must hold (`ProjectDocumentRequirement.forGovernment` / `forPrivate`). Nullable: a project
+  /// nobody has typed yet is held to every kind, which is what every project was before 048.
+  /// Backfilled from `departmentType`, where the data loads wrote "Government" / "Private".
+  sector         ProjectSector?
+  /// Free text — the department or authority (PWD, NHAI). Before 048 the data loads also used it
+  /// for Government / Private; that now lives in `sector`.
   departmentType String?
   projectType    String?
   siteType       ProjectSiteType @default(site)
@@ -1993,21 +2004,27 @@ model Project {
   /// the project *is* the contract. A bill to a subcontractor still reads
   /// `WorkOrder.retentionPercent`, which is that subcontract's own term.
   clientRetentionFraction Decimal? @db.Decimal(8, 6)
+  /// The client's **CPBG** term as a fraction — the contract performance bank guarantee the client
+  /// deducts from payments until a PBG is submitted (048). The client sheet's "Client CPBG %".
+  /// Null means not recorded; it only pre-fills a receipt's CPBG deduction and never decides one.
+  clientCpbgFraction      Decimal? @db.Decimal(8, 6)
   description             String?
 
-  sites             Site[]
-  boqTaskGroups     BOQTaskGroup[]
-  dailyWorkReports  DailyWorkReport[]
-  revenues          Revenue[]
-  raBills           RABill[]
-  clientBills       ClientBill[]
-  workOrders        WorkOrder[]
-  billPackages      BillPackage[]
-  billPackageDebits BillPackageDebit[]
-  debitNotes        BillPackageDebitNote[]
-  budgets           ProjectBudget[]
-  documents         ProjectDocument[]
-  bgTenders         BgTender[]
+  sites              Site[]
+  boqTaskGroups      BOQTaskGroup[]
+  dailyWorkReports   DailyWorkReport[]
+  revenues           Revenue[]
+  raBills            RABill[]
+  clientBills        ClientBill[]
+  workOrders         WorkOrder[]
+  billPackages       BillPackage[]
+  billPackageDebits  BillPackageDebit[]
+  debitNotes         BillPackageDebitNote[]
+  budgets            ProjectBudget[]
+  documents          ProjectDocument[]
+  bgTenders          BgTender[]
+  clientReceipts     ClientBillReceipt[]
+  clientHoldReleases ClientHoldRelease[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2122,6 +2139,15 @@ model BOQTaskItem {
   /// nothing for it and the quantity is the one entered on the bill.
   nonBoq Boolean @default(false)
 
+  /// How this line is priced against the client (047). `percentage` — the schedule rate with the
+  /// project's quoted percentage applied, which is what a "Percentage BoQ" tender means; `item_rate`
+  /// — the bidder's own rate, as quoted, with no percentage on top. A tender may carry both kinds
+  /// in separate schedules, and applying the quoted percentage to item-rate lines bills them wrong.
+  ///
+  /// Default `percentage`, so every line that existed before 047 prices exactly as it did.
+  /// Fixed once a client bill measures the line — see `BoqService.planItem`.
+  pricingBasis BoqPricingBasis @default(percentage)
+
   dwrTasks        DWRTask[]
   clientBillLines ClientBillLine[]
   awardLines      WorkOrderBOQItem[]
@@ -2131,6 +2157,14 @@ model BOQTaskItem {
 
   @@index([companyId])
   @@index([groupId])
+  @@schema("projects")
+}
+
+/// How a BOQ line is priced against the client (047) — see `BOQTaskItem.pricingBasis`.
+enum BoqPricingBasis {
+  percentage
+  item_rate
+
   @@schema("projects")
 }
 
@@ -2617,9 +2651,11 @@ model ClientBill {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lines   ClientBillLine[]
+  lines    ClientBillLine[]
   /// The 023 package, where this bill has been made into one. A relation field, not a column.
-  package BillPackage?
+  package  BillPackage?
+  /// Money the client paid against this bill, with what it held back (048).
+  receipts ClientBillReceipt[]
 
   @@unique([projectId, billNumber])
   @@index([companyId])
@@ -3366,6 +3402,100 @@ model RetentionRelease {
   @@schema("projects")
 }
 
+/// Government or private — see `Project.sector` (048).
+enum ProjectSector {
+  government
+  private
+
+  @@schema("projects")
+}
+
+/// What a client holds back from our money (048).
+enum ClientHoldKind {
+  /// Retention: a percentage of each payment, released after completion or the defect liability period.
+  retention
+  /// Contract performance bank guarantee deducted in cash until a PBG is submitted.
+  cpbg
+
+  @@schema("projects")
+}
+
+/// Money a **client** paid against one of our bills, and what it held back from it (048).
+///
+/// The mirror of `RABillPayment` in the other direction. Until 048 a client bill stopped at
+/// `certified`: nothing recorded that it had been paid, or what the client deducted when it paid,
+/// so how much of our money the client is holding could not be answered.
+///
+/// The bill is settled by `amount + retentionAmount + cpbgAmount + tdsAmount + otherDeduction`.
+/// There is no stored outstanding or held balance — both are derived on read, as `RABillPayment`'s
+/// note explains.
+model ClientBillReceipt {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// Denormalised from the bill so a project's held balance is one indexed query.
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  /// `Restrict`: a bill with money recorded against it is not a bill anybody deletes.
+  clientBillId String
+  clientBill   ClientBill @relation(fields: [clientBillId], references: [id], onDelete: Restrict)
+
+  receivedOn DateTime @db.Date
+  /// What actually arrived in the bank.
+  amount     Decimal  @db.Decimal(18, 2)
+
+  /// Retention the client withheld from this payment.
+  retentionAmount    Decimal @default(0) @db.Decimal(18, 2)
+  /// CPBG the client deducted from this payment, in place of a PBG.
+  cpbgAmount         Decimal @default(0) @db.Decimal(18, 2)
+  /// Tax deducted at source — a credit against our tax, not money the client holds.
+  tdsAmount          Decimal @default(0) @db.Decimal(18, 2)
+  /// Anything else deducted (a penalty, a recovery), with what it was.
+  otherDeduction     Decimal @default(0) @db.Decimal(18, 2)
+  otherDeductionNote String?
+
+  instrument PaymentInstrument
+  reference  String?
+  remarks    String?
+
+  /// `shared.User.id`. Bare id — see the schema-level note.
+  recordedByUserId String?
+  recordedAt       DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, projectId])
+  @@index([clientBillId])
+  @@schema("projects")
+}
+
+/// Retention the client released, or CPBG it refunded (048). Append-only, like `RetentionRelease`.
+model ClientHoldRelease {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  kind       ClientHoldKind
+  /// Always positive; refused above what the client still holds of this kind.
+  amount     Decimal        @db.Decimal(18, 2)
+  releasedOn DateTime       @db.Date
+  reason     String
+
+  /// For a CPBG refund: the PBG whose submission triggered it, where there is one.
+  bankGuaranteeId String?
+  bankGuarantee   BankGuarantee? @relation(fields: [bankGuaranteeId], references: [id], onDelete: SetNull)
+
+  recordedByUserId String?
+  createdAt        DateTime @default(now())
+
+  @@index([companyId, projectId])
+  @@schema("projects")
+}
+
 model WorkOrderBOQItem {
   id        String @id @default(cuid())
   companyId String
@@ -3594,6 +3724,11 @@ model ProjectDocumentRequirement {
   /// A kind cannot be marked mandatory while the company has no document type for it (FR-007d):
   /// that would refuse every creation with no way to comply.
   isMandatory Boolean @default(true)
+
+  /// Which project types this kind is required of (048). Both true by default, which is what every
+  /// requirement meant before project types existed. A project with no type is held to every row.
+  forGovernment Boolean @default(true)
+  forPrivate    Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -6665,17 +6800,17 @@ model Purchase {
 
   /// Object-storage reference for the uploaded bill, same encrypted-reference
   /// pattern as `EmployeeDocument`/`ProjectDocument`.
-  billFileRef  String?
+  billFileRef        String?
   /// The delivery photographed at the gate (028 FR-017). Same pattern as the bill beside it.
   ///
   /// Both are required **before approval, not at creation**: a storekeeper photographing a load at
   /// dusk with no signal must still be able to record that it arrived. Nullable for that reason and
   /// because the rule is not retrospective — purchases recorded before it existed keep their gaps.
-  photoFileRef String?
+  photoFileRef       String?
   /// The site's second to fifth delivery photos (043), in the order taken; `photoFileRef` is the
   /// first. Empty for every purchase with one photo or none.
   extraPhotoFileRefs String[] @default([])
-  remarks      String?
+  remarks            String?
 
   /// The indent line this purchase fulfils, if it came from one (FR-023).
   indentLineId String?
@@ -10400,8 +10535,10 @@ model BankGuarantee {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  documents BankGuaranteeDocument[]
-  events    BankGuaranteeEvent[]
+  documents   BankGuaranteeDocument[]
+  events      BankGuaranteeEvent[]
+  /// CPBG refunds the client made because this PBG was submitted (048).
+  cpbgRefunds ClientHoldRelease[]
 
   @@index([companyId])
   @@index([tenderId])

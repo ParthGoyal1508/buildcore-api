@@ -1,3 +1,5 @@
+import { BoqPricingBasis } from '@prisma/client';
+
 import { itemNumber } from '../../boq/boq-import.service';
 import type { WorkbookRow, WorkbookSheet } from '../../boq/boq-workbook.reader';
 
@@ -45,6 +47,9 @@ export interface CertifiedCopyLine {
   rate: number;
   /** Billed without the premium, so certified without it too. */
   nonBoq?: boolean;
+  /** 047: the line's basis, and whether the bill's premium applies to it — false for item-rate. */
+  pricingBasis?: BoqPricingBasis;
+  takesQuotedPercentage?: boolean;
 }
 
 export interface CertifiedCopySource {

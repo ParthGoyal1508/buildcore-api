@@ -18,9 +18,14 @@ import {
   RaBillStatus,
   SignedCopySubject,
   WorkOrderStatus,
+  BoqPricingBasis,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import {
+  quotedPercentageFor,
+  takesQuotedPercentage,
+} from '../../boq/pricing-basis';
 import {
   APPROVAL_COMPLETED_EVENT,
   APPROVAL_REJECTED_EVENT,
@@ -115,6 +120,8 @@ export interface ScheduleLine {
    * no BOQ line. Billed at its own rate with no premium, no scope and no measurement to propose.
    */
   nonBoq: boolean;
+  /** A client BOQ line's pricing basis (047); absent on a subcontractor's award line. */
+  pricingBasis?: BoqPricingBasis;
 }
 
 /** One proposed line, before anything is written. */
@@ -386,6 +393,7 @@ export class BillPackageService {
           scopeQty: true,
           rate: true,
           nonBoq: true,
+          pricingBasis: true,
         },
       });
       // Text order puts 10 before 2 — see `boq-order.ts`.
@@ -401,6 +409,7 @@ export class BillPackageService {
         boqTaskItemId: item.id,
         unpriced: item.rate.isZero(),
         nonBoq: item.nonBoq,
+        pricingBasis: item.pricingBasis,
       }));
     }
 
@@ -704,8 +713,9 @@ export class BillPackageService {
               ? {}
               : { scopeQty: proposal.line.scopeQty.toNumber() }),
           },
-          // Billed at the rate agreed for it: the tender premium is a bid on the BOQ's lines.
-          proposal.line.nonBoq ? 0 : quotedPercentage,
+          // Billed at the rate agreed for it: the tender premium is a bid on the percentage
+          // schedule's lines — not on a non-BOQ item, and not on an item-rate line (047).
+          quotedPercentageFor(proposal.line, quotedPercentage),
         ),
       }));
       const gross = money(
@@ -1090,15 +1100,16 @@ export class BillPackageService {
         where: { id: claim.clientBillLineId },
         select: {
           rate: true,
-          boqTaskItem: { select: { nonBoq: true } },
+          boqTaskItem: { select: { nonBoq: true, pricingBasis: true } },
           clientBill: { select: { quotedPercentage: true } },
         },
       });
       const totals = lineTotals(
         { quantity: claimed.toNumber(), rate: line.rate.toNumber() },
-        line.boqTaskItem.nonBoq
-          ? 0
-          : line.clientBill.quotedPercentage.toNumber(),
+        quotedPercentageFor(
+          line.boqTaskItem,
+          line.clientBill.quotedPercentage.toNumber(),
+        ),
       );
       await tx.clientBillLine.update({
         where: { id: claim.clientBillLineId },
@@ -2155,7 +2166,7 @@ export class BillPackageService {
                 id: true,
                 quantity: true,
                 rate: true,
-                boqTaskItem: { select: { nonBoq: true } },
+                boqTaskItem: { select: { nonBoq: true, pricingBasis: true } },
               },
             },
           },
@@ -2165,6 +2176,7 @@ export class BillPackageService {
           quantity: line.quantity.toNumber(),
           rate: line.rate.toNumber(),
           nonBoq: line.boqTaskItem.nonBoq,
+          pricingBasis: line.boqTaskItem.pricingBasis,
         }));
         assertCertifiedLines(billLines, byLine);
         certifiedAmount = dec(
@@ -2275,6 +2287,7 @@ export class BillPackageService {
                       taskName: true,
                       unit: true,
                       nonBoq: true,
+                      pricingBasis: true,
                     },
                   },
                 },
@@ -2302,6 +2315,8 @@ export class BillPackageService {
           billedQty: line.quantity.toNumber(),
           rate: line.rate.toNumber(),
           nonBoq: line.boqTaskItem.nonBoq,
+          pricingBasis: line.boqTaskItem.pricingBasis,
+          takesQuotedPercentage: takesQuotedPercentage(line.boqTaskItem),
         }));
       // The premium the bill was priced at, so the screen can price the certified quantities the
       // way `certifiedAmountOf` will — a non-BOQ line without it.

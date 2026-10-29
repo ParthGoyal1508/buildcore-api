@@ -106,4 +106,22 @@ export const BILLING_ERRORS = {
    * or a typed digit, and both are found faster here than in a reconciliation three months later.
    */
   paymentExceedsCertified: 'PAYMENT_EXCEEDS_CERTIFIED',
+  /**
+   * A client receipt against a bill still in draft (048). A draft is not a bill the client has —
+   * money against it would settle a figure that can still change.
+   */
+  receiptBillDraft: 'CLIENT_RECEIPT_BILL_DRAFT',
+  /**
+   * A client receipt whose settled total (received + retention + CPBG + TDS + other) passes the
+   * bill's value (048). A double entry or a typed digit, found faster here than at reconciliation.
+   */
+  receiptExceedsBill: 'CLIENT_RECEIPT_EXCEEDS_BILL',
+  /** A receipt that settles nothing — every figure zero (048). */
+  receiptEmpty: 'CLIENT_RECEIPT_EMPTY',
+  /** Releasing more retention, or refunding more CPBG, than the client still holds (048). */
+  holdReleaseExceedsHeld: 'CLIENT_HOLD_RELEASE_EXCEEDS_HELD',
+  /** A CPBG refund naming a guarantee that is not a PBG of this project (048). */
+  holdReleaseGuaranteeMismatch: 'CLIENT_HOLD_RELEASE_GUARANTEE_MISMATCH',
+  /** Deleting a receipt whose withheld money has already been partly released (048). */
+  receiptReleasedAgainst: 'CLIENT_RECEIPT_RELEASED_AGAINST',
 } as const;

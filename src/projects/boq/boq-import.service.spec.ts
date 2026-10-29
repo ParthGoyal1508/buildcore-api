@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'fs';
 import { join } from 'path';
 
 import { BadRequestException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 import { BOQ_ERRORS } from './boq-error-codes';
 import { BoqImportService, ValidationReport } from './boq-import.service';
@@ -27,11 +28,31 @@ const CALLER = {
  * one counter is the whole of its database surface — and a stub that *only* counts is itself the
  * assertion that nothing else is touched.
  */
-function prismaWithExistingLines(existing: number) {
+function prismaWithExistingLines(existing: number, billed = false) {
   const count = jest.fn().mockResolvedValue(existing);
   const tx = {
     $executeRaw: jest.fn().mockResolvedValue(0),
-    bOQTaskItem: { count },
+    bOQTaskItem: {
+      count,
+      // 047: existing lines are read for replaceability.
+      findMany: jest.fn().mockResolvedValue(
+        Array.from({ length: existing }, (_, index) => ({
+          boqNo: String(index + 1),
+          doneQty: new Prisma.Decimal(0),
+          _count: {
+            dwrTasks: 0,
+            clientBillLines: billed && index < 3 ? 1 : 0,
+            awardLines: 0,
+          },
+        })),
+      ),
+    },
+    bOQTaskGroup: { count: jest.fn().mockResolvedValue(existing ? 2 : 0) },
+    project: {
+      findFirst: jest
+        .fn()
+        .mockResolvedValue({ quotedPercentage: new Prisma.Decimal(0) }),
+    },
   };
   return {
     count,
@@ -436,24 +457,45 @@ describe('BoqImportService.validate', () => {
 });
 
 describe('BoqImportService.validate, on a project that already has a schedule', () => {
-  it('refuses at the validate step rather than at confirm (FR-046, FR-049)', async () => {
-    const batches = new ImportBatchStore();
-    const { prisma } = prismaWithExistingLines(231);
-    const service = new BoqImportService(
+  const build = (billed: boolean) =>
+    new BoqImportService(
       new BoqWorkbookReader(),
-      batches,
-      prisma,
+      new ImportBatchStore(),
+      prismaWithExistingLines(231, billed).prisma,
       null as never,
     );
 
-    // Found by walking quickstart pass 11 against a running instance: the confirm-time check
-    // alone meant somebody uploaded a tender, waited for a 231-line report, read it, pressed
-    // Confirm and *then* learned the project was already populated. The transaction keeps its own
-    // check — the project can gain lines between the two requests, and that one is what makes the
-    // rule true. This one is what makes it kind.
-    await expectRefusal(
-      service.validate({ buffer: readFileSync(SYNTHETIC), ...CALLER }),
-      BOQ_ERRORS.alreadyPopulated,
-    );
+  it('offers to replace a schedule nobody has worked against (047)', async () => {
+    const report = await build(false).validate({
+      buffer: readFileSync(SYNTHETIC),
+      ...CALLER,
+    });
+    expect(report.replace).toEqual({
+      existingLines: 231,
+      existingGroups: 2,
+      replaceable: true,
+    });
+  });
+
+  it('refuses at the validate step, naming what blocks it, when lines are billed (047)', async () => {
+    // Refused here rather than at confirm: somebody should not read a 231-line report and only
+    // then learn the project cannot take it. The transaction re-checks — a line can be billed in
+    // between — but this one is what makes it kind.
+    await build(true)
+      .validate({ buffer: readFileSync(SYNTHETIC), ...CALLER })
+      .then(
+        () => {
+          throw new Error('expected refusal, but the call resolved');
+        },
+        (error: unknown) => {
+          const body = (error as BadRequestException).getResponse() as {
+            code: string;
+            blockedBy: { billed: number; boqNumbers: string[] };
+          };
+          expect(body.code).toBe(BOQ_ERRORS.replaceBlocked);
+          expect(body.blockedBy.billed).toBe(3);
+          expect(body.blockedBy.boqNumbers).toEqual(['1', '2', '3']);
+        },
+      );
   });
 });
