@@ -24,6 +24,7 @@ const DIRECTION: Record<StockLedgerType, 1 | -1> = {
   transfer_out: -1,
   transfer_in_reversal: -1,
   transfer_out_reversal: 1,
+  opening: 1,
 };
 
 /** What each movement is called on the ledger screen and in its download. */
@@ -36,6 +37,7 @@ const LABEL: Record<StockLedgerType, string> = {
   transfer_out: 'Transfer out',
   transfer_in_reversal: 'Transfer in reversed',
   transfer_out_reversal: 'Transfer out reversed',
+  opening: 'Opening stock',
 };
 
 export interface StockLedgerLine {

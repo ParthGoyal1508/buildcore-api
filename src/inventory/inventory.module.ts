@@ -29,6 +29,10 @@ import { PurchaseOrdersController } from './purchase-orders/purchase-orders.cont
 import { PurchaseOrdersService } from './purchase-orders/purchase-orders.service';
 import { PurchasesController } from './purchases/purchases.controller';
 import { PurchasesService } from './purchases/purchases.service';
+import { OpeningStockController } from './opening-stock/opening-stock.controller';
+import { OpeningStockService } from './opening-stock/opening-stock.service';
+import { AgreedRatesController } from './rates/agreed-rates.controller';
+import { AgreedRatesService } from './rates/agreed-rates.service';
 import { DailyRatesController } from './rates/daily-rates.controller';
 import { DailyRatesService } from './rates/daily-rates.service';
 import { VendorItemRateService } from './rates/vendor-item-rate.service';
@@ -84,6 +88,8 @@ import { TransfersService } from './transfers/transfers.service';
     PurchaseOrdersController,
     InventoryExportsController,
     DailyRatesController,
+    OpeningStockController,
+    AgreedRatesController,
   ],
   providers: [
     StockService,
@@ -93,6 +99,8 @@ import { TransfersService } from './transfers/transfers.service';
     PurchaseOrdersService,
     VendorItemRateService,
     DailyRatesService,
+    OpeningStockService,
+    AgreedRatesService,
     IssuesService,
     TransfersService,
     PaymentsService,
