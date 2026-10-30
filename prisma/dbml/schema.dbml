@@ -4012,6 +4012,27 @@ of it, and `StockService.recomputeWAR()` can rebuild `avgRate` from the ledger
 whenever a purchase is reversed.'
 }
 
+Table OpeningStock {
+  id String [pk]
+  companyId String [not null]
+  siteId String [not null, note: '`projects.Site.id` and `settings.Item.id`, plain — Principle I, as on `StockBalance`.']
+  itemId String [not null]
+  quantity Decimal [not null]
+  rate Decimal [note: '₹ per unit. Null when the sheet gave none: the stock is valued at 0 and shown as "no rate".']
+  asOnDate DateTime [not null]
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (itemId, siteId) [unique]
+  }
+
+  Note: '051: the stock a store held when the company started recording it here — one per item per store.
+Its quantity is posted as an `opening` ledger entry (`referenceId` = this id) and counted in
+`StockBalance.received`; it is not a purchase, so no bill, payable or agreed rate comes of it.'
+}
+
 Table StockLedgerEntry {
   id String [pk]
   companyId String [not null]
@@ -4029,7 +4050,8 @@ reversal pairs are found by this id.']
 
   Note: 'Append-only. No update or delete path exists in the service layer, and the
 absence of an `updatedAt` here is deliberate — a row that can be amended is not
-a ledger.'
+a ledger. One exception (051): an `opening` entry may be removed when its opening stock
+is replaced or deleted, which is refused once any movement of the pair follows it.'
 }
 
 Table Purchase {
@@ -6915,6 +6937,7 @@ Enum ItemUnit {
   LTR
   RMT
   SQM
+  KL
 }
 
 Enum StockLedgerType {
@@ -6926,6 +6949,7 @@ Enum StockLedgerType {
   transfer_out
   transfer_in_reversal
   transfer_out_reversal
+  opening
 }
 
 Enum PurchaseBillStatus {

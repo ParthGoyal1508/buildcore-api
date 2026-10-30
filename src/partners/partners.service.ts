@@ -80,6 +80,23 @@ export class PartnersService {
   }
 
   /**
+   * Every vendor of one company, for matching an imported sheet's vendor names (051). Names and
+   * ids only; the importer decides how names compare.
+   */
+  async listVendorsForCompany(
+    ctx: RlsContext,
+    companyId: string,
+  ): Promise<{ id: string; name: string; active: boolean }[]> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.vendor.findMany({
+        where: { companyId },
+        select: { id: true, name: true, active: true },
+        orderBy: { name: 'asc' },
+      }),
+    );
+  }
+
+  /**
    * What a document addressed to a vendor prints about them (2026-10-15): the vehicle hiring
    * bill's "Sub Contractor Details" and bank block, and the hire order's "To" block. Null for an
    * unknown id, like the rest of this service.

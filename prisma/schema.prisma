@@ -6519,6 +6519,8 @@ enum ItemUnit {
   LTR
   RMT
   SQM
+  /// 051: kilolitre — bitumen is bought by the KL.
+  KL
 
   @@schema("settings")
 }
@@ -6655,6 +6657,9 @@ enum StockLedgerType {
   transfer_out
   transfer_in_reversal
   transfer_out_reversal
+  /// 051: stock already in a store when the company started recording it here. Counted in
+  /// `StockBalance.received` and in the weighted average like a receipt, with no purchase behind it.
+  opening
 
   @@schema("inventory")
 }
@@ -6730,9 +6735,36 @@ model StockBalance {
   @@schema("inventory")
 }
 
+/// 051: the stock a store held when the company started recording it here — one per item per store.
+/// Its quantity is posted as an `opening` ledger entry (`referenceId` = this id) and counted in
+/// `StockBalance.received`; it is not a purchase, so no bill, payable or agreed rate comes of it.
+model OpeningStock {
+  id String @id @default(cuid())
+
+  companyId String
+  /// `projects.Site.id` and `settings.Item.id`, plain — Principle I, as on `StockBalance`.
+  siteId    String
+  itemId    String
+
+  quantity Decimal  @db.Decimal(18, 3)
+  /// ₹ per unit. Null when the sheet gave none: the stock is valued at 0 and shown as "no rate".
+  rate     Decimal? @db.Decimal(18, 2)
+  asOnDate DateTime @db.Date
+
+  createdByUserId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([itemId, siteId])
+  @@index([companyId, siteId])
+  @@schema("inventory")
+}
+
 /// Append-only. No update or delete path exists in the service layer, and the
 /// absence of an `updatedAt` here is deliberate — a row that can be amended is not
-/// a ledger.
+/// a ledger. One exception (051): an `opening` entry may be removed when its opening stock
+/// is replaced or deleted, which is refused once any movement of the pair follows it.
 model StockLedgerEntry {
   id String @id @default(cuid())
 

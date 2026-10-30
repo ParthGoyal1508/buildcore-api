@@ -235,6 +235,30 @@ describe('StockService', () => {
       expect(war).toBe(390);
     });
 
+    it('values opening stock like a receipt (051)', async () => {
+      // 120 opening @ 410, then 80 @ 460: 200 @ 430, as the live balance computes it.
+      const tx = ledger([
+        {
+          type: StockLedgerType.opening,
+          quantity: 120,
+          rate: 410,
+          referenceId: 'o1',
+        },
+        {
+          type: StockLedgerType.purchase,
+          quantity: 80,
+          rate: 460,
+          referenceId: 'p1',
+        },
+      ]);
+      const war = await service.recomputeWAR(tx, {
+        companyId: 'co-1',
+        itemId: 'item-1',
+        siteId: 'site-1',
+      });
+      expect(war).toBe(430);
+    });
+
     it('returns to zero when every purchase has been reversed', async () => {
       const tx = ledger([
         {

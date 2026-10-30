@@ -147,6 +147,37 @@ export class VendorItemRateService {
   }
 
   /**
+   * Records rates agreed with vendors up front, from the client's Vendor Rates sheet (051), for
+   * pairs that have none in force. `establishedByPurchaseId` stays null — that is what tells an
+   * imported rate from one a first purchase set — and from then on `currentFor` returns it exactly
+   * as it would an established one, so the next purchase is held to it.
+   *
+   * Never overwrites: a pair that already has a rate in force is the caller's to report, because
+   * changing an agreed rate is the approved-change path's job, not an import's. `skipDuplicates`
+   * for the same reason `establish` swallows P2002 — two writers of one new pair agree on nothing
+   * worth failing over.
+   *
+   * @returns how many rows were written.
+   */
+  async recordAgreed(
+    tx: Prisma.TransactionClient,
+    rows: {
+      companyId: string;
+      vendorId: string;
+      itemId: string;
+      rate: number;
+      effectiveFrom: Date;
+    }[],
+  ): Promise<number> {
+    if (rows.length === 0) return 0;
+    const { count } = await tx.vendorItemRate.createMany({
+      data: rows.map((row) => ({ ...row, establishedByPurchaseId: null })),
+      skipDuplicates: true,
+    });
+    return count;
+  }
+
+  /**
    * What every vendor has agreed for one item (028 FR-016).
    *
    * Read beside a first entry, so a figure typed well away from what others charge is typed

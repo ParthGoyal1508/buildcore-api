@@ -144,6 +144,9 @@ export class StockService {
     for (const entry of entries) {
       const quantity = toNumber(entry.quantity);
       switch (entry.type) {
+        // 051: opening stock is valued like a receipt — it is stock at a rate, only without a
+        // purchase behind it. Never reversed: replacing or deleting one removes its row.
+        case StockLedgerType.opening:
         case StockLedgerType.purchase: {
           if (reversed.has(entry.referenceId)) break;
           const rate = toNumber(entry.rate);

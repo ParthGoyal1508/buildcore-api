@@ -47,6 +47,35 @@ export class InventoryRefsService {
     return this.companies.getPunchAccuracyMaxMetres(companyId);
   }
 
+  /** Every store (site) of a company, for matching an imported sheet's store names (051). */
+  async companySites(
+    caller: AuthenticatedUser,
+    companyId: string,
+  ): Promise<{ id: string; name: string }[]> {
+    return this.sites.listForCompany(rlsContextFor(caller), companyId);
+  }
+
+  /** Every item of a company, active or not, for matching an imported sheet's item names (051). */
+  async companyItems(
+    caller: AuthenticatedUser,
+    companyId: string,
+  ): Promise<ItemView[]> {
+    const ids = await this.items.getItemIdsMatching(caller, { companyId });
+    const items = await this.items.getItemsByIds(caller, ids);
+    return [...items.values()].filter((item) => item.companyId === companyId);
+  }
+
+  /** Every vendor of a company, for matching an imported sheet's vendor names (051). */
+  async companyVendors(
+    caller: AuthenticatedUser,
+    companyId: string,
+  ): Promise<{ id: string; name: string; active: boolean }[]> {
+    return this.partners.listVendorsForCompany(
+      rlsContextFor(caller),
+      companyId,
+    );
+  }
+
   /** Active items matching a name or code, for the site entry's item picker (043). */
   async searchActiveItems(
     caller: AuthenticatedUser,
