@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Permission } from '@prisma/client';
 
+import { ClientReceiptsService } from '../../projects/billing/client-receipts.service';
 import { ProjectPnlService } from '../../projects/pnl/project-pnl.service';
 import { ProjectsService } from '../../projects/portfolio/projects.service';
 import type { DashboardContext } from '../context';
@@ -184,6 +185,81 @@ export class ProjectCostReportProvider implements ReportProvider {
         { key: 'variance', label: 'Variance', type: 'money' },
       ],
       rows,
+    };
+  }
+}
+
+/**
+ * What each client is holding of ours, per project (048): retention withheld and released, CPBG
+ * deducted and refunded, and whether a PBG is running while CPBG is still held.
+ *
+ * Read through `ClientReceiptsService`, the service behind the project screen's held-by-client
+ * panel, so the report and the screen cannot disagree.
+ */
+@Injectable()
+export class ClientHoldingsReportProvider implements ReportProvider {
+  readonly id = 'client-holdings';
+  readonly name = 'Held by client (retention & CPBG)';
+  readonly requires = [Permission.PROJECT_FINANCIALS];
+  readonly filters: FilterSpec[] = [];
+
+  constructor(
+    private readonly projects: ProjectsService,
+    private readonly receipts: ClientReceiptsService,
+  ) {}
+
+  isAvailable(): boolean {
+    return true;
+  }
+
+  async run(ctx: DashboardContext): Promise<ReportData> {
+    const all = await this.projects.getProjectsWithContractValues(
+      ctx.companyId,
+    );
+    const holdings = await this.receipts.holdingsForProjects(
+      ctx.rls,
+      all.map((project) => project.projectId),
+    );
+    return {
+      columns: [
+        { key: 'project', label: 'Project' },
+        { key: 'received', label: 'Received from client', type: 'money' },
+        {
+          key: 'retentionWithheld',
+          label: 'Retention withheld',
+          type: 'money',
+        },
+        {
+          key: 'retentionReleased',
+          label: 'Retention released',
+          type: 'money',
+        },
+        { key: 'retentionHeld', label: 'Retention held', type: 'money' },
+        { key: 'cpbgDeducted', label: 'CPBG deducted', type: 'money' },
+        { key: 'cpbgRefunded', label: 'CPBG refunded', type: 'money' },
+        { key: 'cpbgHeld', label: 'CPBG held', type: 'money' },
+        { key: 'totalHeld', label: 'Total held by client', type: 'money' },
+        { key: 'pbg', label: 'PBG running' },
+      ],
+      rows: all.map((project) => {
+        const h = holdings.get(project.projectId);
+        return {
+          project: project.name,
+          received: Number(h?.received ?? 0),
+          retentionWithheld: Number(h?.retention.withheld ?? 0),
+          retentionReleased: Number(h?.retention.released ?? 0),
+          retentionHeld: Number(h?.retention.held ?? 0),
+          cpbgDeducted: Number(h?.cpbg.deducted ?? 0),
+          cpbgRefunded: Number(h?.cpbg.refunded ?? 0),
+          cpbgHeld: Number(h?.cpbg.held ?? 0),
+          totalHeld: Number(h?.totalHeld ?? 0),
+          pbg: !h?.runningPbgs.length
+            ? ''
+            : h.cpbgRefundDue
+            ? 'Yes — CPBG refund due'
+            : 'Yes',
+        };
+      }),
     };
   }
 }

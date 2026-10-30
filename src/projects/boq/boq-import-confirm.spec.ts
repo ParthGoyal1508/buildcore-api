@@ -1,5 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
-import { AuditEntityType } from '@prisma/client';
+import { AuditEntityType, Prisma } from '@prisma/client';
+
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 
 import { BOQ_ERRORS } from './boq-error-codes';
 import { BoqImportService } from './boq-import.service';
@@ -27,6 +30,7 @@ const GROUPS: StagedGroup[] = [
         rate: '251.00',
         amount: '25100.00',
         sourceRow: 13,
+        pricingBasis: 'percentage',
       },
       {
         boqNo: '2',
@@ -36,6 +40,7 @@ const GROUPS: StagedGroup[] = [
         rate: '120.00',
         amount: '6000.00',
         sourceRow: 14,
+        pricingBasis: 'percentage',
       },
     ],
   },
@@ -48,6 +53,10 @@ function fakePrisma(
     failOnCreate?: boolean;
     /** Fails the write with a Prisma error code, as a real database would. */
     failWithCode?: string;
+    /** What the project's quoted percentage is at confirm (047). Defaults to the batch's. */
+    projectQuoted?: string;
+    /** Makes the first existing line billed, so replacing it is refused (047). */
+    existingBilled?: boolean;
   } = {},
 ) {
   const created = {
@@ -59,6 +68,17 @@ function fakePrisma(
     $executeRaw: jest.fn().mockResolvedValue(0),
     bOQTaskItem: {
       count: jest.fn().mockResolvedValue(options.existingItems ?? 0),
+      findMany: jest.fn().mockResolvedValue(
+        Array.from({ length: options.existingItems ?? 0 }, (_, index) => ({
+          boqNo: String(index + 1),
+          doneQty: new Prisma.Decimal(0),
+          _count: {
+            dwrTasks: 0,
+            clientBillLines: options.existingBilled && index === 0 ? 1 : 0,
+            awardLines: 0,
+          },
+        })),
+      ),
       createMany: jest.fn(({ data }: { data: unknown[] }) => {
         if (options.failOnCreate) throw new Error('constraint violation');
         if (options.failWithCode) {
@@ -93,8 +113,15 @@ function fakePrisma(
        * transaction budget on a hosted database and reached the browser as a bare 500.
        */
       create: jest.fn(),
+      count: jest.fn().mockResolvedValue(options.existingItems ? 1 : 0),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     project: {
+      findFirst: jest.fn().mockResolvedValue({
+        quotedPercentage: new Prisma.Decimal(
+          options.projectQuoted ?? '0.024600',
+        ),
+      }),
       update: jest.fn(({ data }: { data: unknown }) => {
         created.projectUpdates.push(data);
         return Promise.resolve({});
@@ -142,6 +169,7 @@ function manyGroups(count: number): StagedGroup[] {
         rate: '251.00',
         amount: '25100.00',
         sourceRow: 13 + index,
+        pricingBasis: 'percentage' as const,
       },
     ],
   }));
@@ -160,6 +188,8 @@ describe('BoqImportService.confirm', () => {
       projectId: CALLER.projectId,
       groups: GROUPS,
       quotedPercentage: '0.024600',
+      schedules: [{ sheetName: 'BoQ1', pricingBasis: 'percentage', lines: 2 }],
+      existingLines: 0,
       // The tender variant unless a case says otherwise; `estimate-import.spec.ts` covers the
       // estimate, whose confirm writes different rows and touches no quoted percentage.
       isEstimate: false,
@@ -193,6 +223,8 @@ describe('BoqImportService.confirm', () => {
       lines: 2,
       isEstimate: false,
       quotedPercentageSet: true,
+      quotedPercentage: '0.024600',
+      replaced: 0,
     });
     expect(created.groups).toHaveLength(1);
     expect(created.items).toHaveLength(2);
@@ -405,8 +437,8 @@ describe('BoqImportService.confirm', () => {
 
     // Two imports racing would otherwise both read an empty project and both write. The count
     // has to share the transaction with the writes for the refusal to mean anything.
-    expect(tx.bOQTaskItem.count).toHaveBeenCalled();
-    expect(tx.bOQTaskItem.count.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(tx.bOQTaskItem.findMany).toHaveBeenCalled();
+    expect(tx.bOQTaskItem.findMany.mock.invocationCallOrder[0]).toBeLessThan(
       tx.bOQTaskGroup.createManyAndReturn.mock.invocationCallOrder[0],
     );
   });
@@ -448,3 +480,184 @@ describe('BoqImportService.confirm', () => {
     );
   });
 });
+
+/** The real tender is local-only (git-ignored); without it these report as skipped. */
+const NEWAI_PRESENT = existsSync(
+  join(process.cwd(), 'test', 'fixtures', 'tenders', 'NEWAI_SHAHID_SMARAK.xls'),
+);
+if (!NEWAI_PRESENT) {
+  it.skip('SKIPPED — test/fixtures/tenders/ is not present in this checkout', () =>
+    undefined);
+}
+
+(NEWAI_PRESENT ? describe : describe.skip)(
+  'BoqImportService.confirm — 047',
+  () => {
+    const NEWAI = join(
+      process.cwd(),
+      'test',
+      'fixtures',
+      'tenders',
+      'NEWAI_SHAHID_SMARAK.xls',
+    );
+
+    const setup = (options: Parameters<typeof fakePrisma>[0] = {}) => {
+      const db = fakePrisma(options);
+      const audit = { record: jest.fn() };
+      const service = new BoqImportService(
+        new BoqWorkbookReader(),
+        new ImportBatchStore(),
+        db.prisma,
+        audit as never,
+      );
+      const validated = () =>
+        service.validate({ buffer: readFileSync(NEWAI), ...CALLER });
+      const confirm = (
+        batchId: string,
+        extra: {
+          quotedPercentageSource?: 'file' | 'project';
+          replaceExisting?: boolean;
+        } = {},
+      ) => service.confirm({ batchId, ...CALLER, ...extra });
+      return { ...db, audit, validated, confirm };
+    };
+
+    it('writes each line with its schedule’s basis, prefixed by its sheet', async () => {
+      const { validated, confirm, created } = setup({
+        projectQuoted: '-0.1912',
+      });
+      const report = await validated();
+      await confirm(report.batchId);
+
+      const items = created.items as {
+        boqNo: string;
+        pricingBasis: string;
+      }[];
+      expect(items).toHaveLength(102);
+      expect(items.filter((i) => i.pricingBasis === 'item_rate')).toHaveLength(
+        2,
+      );
+      expect(
+        items.every((i) =>
+          i.pricingBasis === 'item_rate'
+            ? i.boqNo.startsWith('BoQ1/')
+            : i.boqNo.startsWith('BoQ2/'),
+        ),
+      ).toBe(true);
+      const groups = created.groups as { name: string; boqNo: string }[];
+      expect(groups[0].name).toMatch(/^BoQ1 \(Item rate\) › /);
+      expect(groups.map((g) => g.boqNo)).toEqual(
+        groups.map((_, index) => String(index + 1)),
+      );
+    });
+
+    it('refuses without a choice when the file’s quoted percentage differs, writing nothing', async () => {
+      const { validated, confirm, created } = setup({ projectQuoted: '-0.04' });
+      const report = await validated();
+      expect(report.quotedPercentageDiffers).toBe(true);
+
+      await expectRefusal(
+        confirm(report.batchId),
+        BOQ_ERRORS.quotedPercentageChoiceRequired,
+      );
+      expect(created.items).toEqual([]);
+      // Released, not lost: the same batch confirms once the choice is made.
+      await expect(
+        confirm(report.batchId, { quotedPercentageSource: 'project' }),
+      ).resolves.toMatchObject({ quotedPercentage: '-0.040000' });
+      expect(created.projectUpdates).toEqual([]);
+    });
+
+    it('writes the file’s figure when told to', async () => {
+      const { validated, confirm, created, audit } = setup({
+        projectQuoted: '-0.04',
+      });
+      const report = await validated();
+      const result = await confirm(report.batchId, {
+        quotedPercentageSource: 'file',
+      });
+      expect(result).toMatchObject({
+        quotedPercentage: '-0.191200',
+        quotedPercentageSet: true,
+      });
+      expect(created.projectUpdates).toEqual([
+        { quotedPercentage: '-0.191200' },
+      ]);
+      expect(audit.record.mock.calls[0][0].changes).toMatchObject({
+        quotedPercentageBefore: '-0.040000',
+        quotedPercentageAfter: '-0.191200',
+        quotedPercentageSource: 'file',
+      });
+    });
+
+    it('refuses to replace existing lines unless asked to', async () => {
+      const { validated, confirm, tx } = setup({
+        existingItems: 5,
+        projectQuoted: '-0.1912',
+      });
+      const report = await validated();
+      expect(report.replace).toMatchObject({
+        existingLines: 5,
+        replaceable: true,
+      });
+
+      await expectRefusal(confirm(report.batchId), BOQ_ERRORS.alreadyPopulated);
+      expect(tx.bOQTaskGroup.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('replaces them in the same transaction when asked, and audits it', async () => {
+      const { validated, confirm, tx, audit } = setup({
+        existingItems: 5,
+        projectQuoted: '-0.1912',
+      });
+      const report = await validated();
+      const result = await confirm(report.batchId, { replaceExisting: true });
+
+      expect(result.replaced).toBe(5);
+      expect(tx.bOQTaskGroup.deleteMany).toHaveBeenCalledWith({
+        where: { projectId: CALLER.projectId, isEstimate: false },
+      });
+      expect(
+        tx.bOQTaskGroup.deleteMany.mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        tx.bOQTaskGroup.createManyAndReturn.mock.invocationCallOrder[0],
+      );
+      expect(audit.record.mock.calls[0][0].changes).toMatchObject({
+        replacedLines: 5,
+      });
+    });
+
+    it('re-checks inside the transaction: a line billed since validate stops the replace', async () => {
+      // Validate would refuse outright now, so the batch is staged as validate issued it earlier.
+      const store = new ImportBatchStore();
+      const batch = store.create({
+        companyId: CALLER.companyId,
+        userId: CALLER.userId,
+        projectId: CALLER.projectId,
+        groups: GROUPS,
+        quotedPercentage: null,
+        schedules: [],
+        existingLines: 5,
+        isEstimate: false,
+      })!;
+      const db = fakePrisma({ existingItems: 5, existingBilled: true });
+      const service = new BoqImportService(
+        new BoqWorkbookReader(),
+        store,
+        db.prisma,
+        { record: jest.fn() } as never,
+      );
+
+      await expectRefusal(
+        service.confirm({
+          batchId: batch.id,
+          ...CALLER,
+          replaceExisting: true,
+        }),
+        BOQ_ERRORS.replaceBlocked,
+      );
+      expect(db.tx.bOQTaskGroup.deleteMany).not.toHaveBeenCalled();
+      expect(db.created.items).toEqual([]);
+    });
+  },
+);

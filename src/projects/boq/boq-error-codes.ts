@@ -57,6 +57,26 @@ export const BOQ_ERRORS = {
    * plausible small number, which is the kind of wrong figure nobody questions.
    */
   programmeInconsistent: 'BOQ_PROGRAMME_INCONSISTENT',
+
+  /**
+   * A schedule's derived total disagrees with the total the workbook states, beyond the tolerance
+   * (047). A **blocker**, not a warning: until 047 it was only a warning, and a GST row read as a
+   * ₹21 crore line was confirmed onto a project with the mismatch sitting on the report.
+   */
+  notReconciled: 'BOQ_IMPORT_NOT_RECONCILED',
+  /** Two percentage schedules quoting different percentages; a project holds one (047). */
+  quotedPercentagesConflict: 'BOQ_QUOTED_PERCENTAGES_CONFLICT',
+  /**
+   * The workbook's quoted percentage differs from the project's and confirm did not say which to
+   * keep (047). Until 047 the file's silently overwrote the project's.
+   */
+  quotedPercentageChoiceRequired: 'BOQ_QUOTED_PERCENTAGE_CHOICE_REQUIRED',
+  /** Replacing the BOQ is refused: some line is measured, in a DWR, billed or awarded (047). */
+  replaceBlocked: 'BOQ_REPLACE_BLOCKED',
+  /** A section that still holds lines cannot be deleted (047). */
+  groupNotEmpty: 'BOQ_GROUP_NOT_EMPTY',
+  /** A billed line's pricing basis cannot change — it would restate the bill (047). */
+  pricingBasisLocked: 'BOQ_PRICING_BASIS_LOCKED',
 } as const;
 
 export type BoqErrorCode = (typeof BOQ_ERRORS)[keyof typeof BOQ_ERRORS];

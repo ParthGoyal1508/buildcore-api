@@ -1,7 +1,9 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BoqPricingBasis } from '@prisma/client';
 
 import { lineTotals, money } from './bill-totals';
 import { BILLING_ERRORS } from './billing-error-codes';
+import { quotedPercentageFor } from '../boq/pricing-basis';
 
 /**
  * What a client certified **line by line**, checked and priced in one place (2026-10-15).
@@ -28,6 +30,8 @@ export interface CertifiableLine {
    * certified at it too.
    */
   nonBoq?: boolean;
+  /** An item-rate line is billed at its own rate, so certified at it too (047). */
+  pricingBasis?: BoqPricingBasis;
 }
 
 /**
@@ -91,7 +95,7 @@ export function certifiedAmountOf(
         sum +
         lineTotals(
           { quantity: qty, rate: line.rate },
-          line.nonBoq ? 0 : quotedPercentage,
+          quotedPercentageFor(line, quotedPercentage),
         ).amount
       );
     }, 0),

@@ -3,6 +3,8 @@ import { join } from 'path';
 
 import { BadRequestException } from '@nestjs/common';
 
+import { Prisma } from '@prisma/client';
+
 import { BOQ_ERRORS } from './boq-error-codes';
 import { BoqImportService } from './boq-import.service';
 import { BoqWorkbookReader } from './boq-workbook.reader';
@@ -40,7 +42,12 @@ const CALLER = {
  */
 
 /** A Prisma stub counting existing lines **per variant**, which is the behaviour under test. */
-function prismaWith(counts: { tender: number; estimate: number }) {
+function prismaWith(counts: {
+  tender: number;
+  estimate: number;
+  /** 047: existing lines of this variant are billed, so replacing them is refused. */
+  billed?: boolean;
+}) {
   const calls: { isEstimate: boolean }[] = [];
   const written = {
     groups: [] as Record<string, unknown>[],
@@ -50,9 +57,19 @@ function prismaWith(counts: { tender: number; estimate: number }) {
   const tx = {
     $executeRaw: jest.fn().mockResolvedValue(0),
     bOQTaskItem: {
-      count: jest.fn(async (args: { where: { isEstimate: boolean } }) => {
+      // 047: the existing lines are read for replaceability rather than only counted.
+      findMany: jest.fn(async (args: { where: { isEstimate: boolean } }) => {
         calls.push({ isEstimate: args.where.isEstimate });
-        return args.where.isEstimate ? counts.estimate : counts.tender;
+        const n = args.where.isEstimate ? counts.estimate : counts.tender;
+        return Array.from({ length: n }, (_, index) => ({
+          boqNo: String(index + 1),
+          doneQty: new Prisma.Decimal(0),
+          _count: {
+            dwrTasks: 0,
+            clientBillLines: counts.billed ? 1 : 0,
+            awardLines: 0,
+          },
+        }));
       }),
       createMany: jest.fn(async (args: { data: Record<string, unknown>[] }) => {
         written.items.push(...args.data);
@@ -60,6 +77,8 @@ function prismaWith(counts: { tender: number; estimate: number }) {
       }),
     },
     bOQTaskGroup: {
+      count: jest.fn(async () => 1),
+      deleteMany: jest.fn(async () => ({ count: 1 })),
       createManyAndReturn: jest.fn(
         async (args: { data: Record<string, unknown>[] }) => {
           written.groups.push(...args.data);
@@ -71,6 +90,9 @@ function prismaWith(counts: { tender: number; estimate: number }) {
       ),
     },
     project: {
+      findFirst: jest.fn(async () => ({
+        quotedPercentage: new Prisma.Decimal(0),
+      })),
       update: jest.fn(async (args: { data: Record<string, unknown> }) => {
         written.projectUpdates.push(args.data);
         return {};
@@ -86,7 +108,12 @@ function prismaWith(counts: { tender: number; estimate: number }) {
   };
 }
 
-function build(counts = { tender: 0, estimate: 0 }) {
+function build(
+  counts: { tender: number; estimate: number; billed?: boolean } = {
+    tender: 0,
+    estimate: 0,
+  },
+) {
   const batches = new ImportBatchStore();
   const audit = { record: jest.fn() };
   const db = prismaWith(counts);
@@ -165,35 +192,30 @@ describe('the estimate import (T097)', () => {
         service.validate({ buffer: read(), ...CALLER, isEstimate: true }),
       ).resolves.toMatchObject({ isEstimate: true });
 
-      // Asserted rather than inferred: the count must have asked about estimates specifically.
+      // Asserted rather than inferred: the read must have asked about estimates specifically —
+      // once at validate and nowhere about the tender.
       expect(calls).toEqual([{ isEstimate: true }]);
     });
 
-    it('refuses a second estimate, naming the variant rather than just a count', async () => {
+    it('offers to replace an untouched estimate, naming the variant (047)', async () => {
       const { service } = build({ tender: 231, estimate: 12 });
 
-      await service
-        .validate({ buffer: read(), ...CALLER, isEstimate: true })
-        .then(
-          () => {
-            throw new Error('expected a refusal, but the call resolved');
-          },
-          (error: unknown) => {
-            expect(error).toBeInstanceOf(BadRequestException);
-            const body = (error as BadRequestException).getResponse() as {
-              code?: string;
-              message?: string;
-            };
-            expect(body.code).toBe(BOQ_ERRORS.alreadyPopulated);
-            // "This project already has 231 BOQ lines" on a project whose estimate has 12 is a
-            // figure the operator cannot reconcile with the screen in front of them.
-            expect(body.message).toContain('12 estimate lines');
-          },
-        );
+      const report = await service.validate({
+        buffer: read(),
+        ...CALLER,
+        isEstimate: true,
+      });
+
+      // The 12 estimate lines, not the 231 tender lines: the replace is scoped to the variant.
+      expect(report.replace).toEqual({
+        existingLines: 12,
+        existingGroups: 1,
+        replaceable: true,
+      });
     });
 
-    it('still refuses a second tender on a project that has one', async () => {
-      const { service } = build({ tender: 231, estimate: 12 });
+    it('refuses to replace a tender whose lines are billed, naming the variant', async () => {
+      const { service } = build({ tender: 231, estimate: 12, billed: true });
 
       await service.validate({ buffer: read(), ...CALLER }).then(
         () => {
@@ -201,9 +223,11 @@ describe('the estimate import (T097)', () => {
         },
         (error: unknown) => {
           const body = (error as BadRequestException).getResponse() as {
+            code?: string;
             message?: string;
           };
-          expect(body.message).toContain('231 BOQ lines');
+          expect(body.code).toBe(BOQ_ERRORS.replaceBlocked);
+          expect(body.message).toContain('BOQ (231 lines)');
         },
       );
     });
@@ -259,11 +283,14 @@ describe('the estimate import (T097)', () => {
     it('does set it for a tender, so the case above is a difference and not a bug', async () => {
       const { service, written } = build();
       const report = await service.validate({ buffer: read(), ...CALLER });
+      // The stub project holds 0, so the file's figure differs and must be chosen (047).
+      expect(report.quotedPercentageDiffers).toBe(true);
 
       const result = await service.confirm({
         batchId: report.batchId,
         ...CALLER,
         ipAddress: '127.0.0.1',
+        quotedPercentageSource: 'file',
       });
 
       expect(written.projectUpdates).toHaveLength(1);

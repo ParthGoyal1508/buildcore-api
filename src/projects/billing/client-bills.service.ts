@@ -4,7 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BillPackageStatus, ClientBillStatus, Prisma } from '@prisma/client';
+import {
+  BillPackageStatus,
+  BoqPricingBasis,
+  ClientBillStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../common/prisma/rls-context';
@@ -22,6 +27,10 @@ import {
 import { nextClientBillNumber, packageLabel } from './bill-number';
 import { balanceColumn } from './package/bill-abstract';
 import { compareBoqNo, sortByBoqNo } from '../boq/boq-order';
+import {
+  quotedPercentageFor,
+  takesQuotedPercentage,
+} from '../boq/pricing-basis';
 import {
   contentDispositionFor,
   detectContentType,
@@ -114,6 +123,8 @@ export interface ClientBillLineView {
   overScopeReason: string | null;
   isVariation: boolean;
   variationRef: string | null;
+  /** How the line is priced (047). `quotedRate` equals `rate` for an item-rate line. */
+  pricingBasis: BoqPricingBasis;
 }
 
 /** One BOQ line, priced and positioned, ready to be measured on a bill. */
@@ -137,6 +148,13 @@ export interface BillableBoqItem {
   remainingQty: number;
   isVariation: boolean;
   variationRef: string | null;
+  /** How the line is priced (047). */
+  pricingBasis: BoqPricingBasis;
+  /**
+   * Whether the quoted percentage applies to this line (047) — false for item-rate lines and
+   * non-BOQ items. Sent so a screen pricing a line uses the server's rule, not its own copy.
+   */
+  takesQuotedPercentage: boolean;
 }
 
 /** A BOQ heading and the lines under it. */
@@ -476,7 +494,8 @@ export class ClientBillsService {
             previouslyBilledQty: previously.get(line.boqTaskItemId) ?? 0,
             scopeQty: item.scopeQty.toNumber(),
           },
-          quotedPercentage,
+          // 047: an item-rate line is billed at its own rate; the premium is a bid on the schedule.
+          quotedPercentageFor(item, quotedPercentage),
         );
         return { line, item, totals };
       });
@@ -856,6 +875,8 @@ export class ClientBillsService {
       const previously = await this.previouslyBilled(tx, allItemIds);
 
       let estimatedTotal = 0;
+      /** The part of `estimatedTotal` the quoted percentage applies to (047). */
+      let quotedBase = 0;
       let unpricedCount = 0;
       const shaped: BillableBoqGroup[] = groups.map((group) => ({
         id: group.id,
@@ -867,6 +888,7 @@ export class ClientBillsService {
           const billed = previously.get(item.id) ?? 0;
           if (rate === 0) unpricedCount += 1;
           estimatedTotal += scopeQty * rate;
+          if (takesQuotedPercentage(item)) quotedBase += scopeQty * rate;
           return {
             id: item.id,
             boqNo: item.boqNo,
@@ -881,6 +903,8 @@ export class ClientBillsService {
             remainingQty: quantity(scopeQty - billed),
             isVariation: item.isVariation,
             variationRef: item.variationRef,
+            pricingBasis: item.pricingBasis,
+            takesQuotedPercentage: takesQuotedPercentage(item),
           };
         }),
       }));
@@ -891,8 +915,9 @@ export class ClientBillsService {
         quotedPercentage,
         estimatedTotal: money(estimatedTotal),
         // The percentage applied **once, to the total**. Per line it rounds differently and the
-        // grand total stops matching the tender document it came from.
-        quotedTotal: money(estimatedTotal * (1 + quotedPercentage)),
+        // grand total stops matching the tender document it came from. Since 047, only to the
+        // percentage lines' share of it: an item-rate schedule's total is already its quote.
+        quotedTotal: money(estimatedTotal + quotedBase * quotedPercentage),
         groups: shaped,
         unpricedCount,
       };
@@ -979,7 +1004,10 @@ export class ClientBillsService {
           scopeQty,
           quantity: line.quantity.toNumber(),
           rate: line.rate.toNumber(),
-          quotedRate: unitRate(line.rate.toNumber() * (1 + quoted)),
+          quotedRate: unitRate(
+            line.rate.toNumber() *
+              (1 + quotedPercentageFor(line.boqTaskItem, quoted)),
+          ),
           amount: line.amount.toNumber(),
           cumulativeQty,
           remainingQty: quantity(scopeQty - cumulativeQty),
@@ -988,6 +1016,7 @@ export class ClientBillsService {
           overScopeReason: line.overScopeReason,
           isVariation: line.boqTaskItem.isVariation,
           variationRef: line.boqTaskItem.variationRef,
+          pricingBasis: line.boqTaskItem.pricingBasis,
         };
       });
 

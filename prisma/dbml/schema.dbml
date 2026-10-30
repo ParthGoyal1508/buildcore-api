@@ -1007,7 +1007,12 @@ the safe one — it prices from the schedule exactly.']
   projectManagerEmployeeId String [note: '`hr.Employee.id`, resolved through `EmployeesService` on the reads that need a
 name. Bare id — see the schema-level note above.']
   division ProjectDivision [not null, default: 'contract']
-  departmentType String
+  sector ProjectSector [note: '**Government or private** — who the client is (048). Decides which document kinds the project
+must hold (`ProjectDocumentRequirement.forGovernment` / `forPrivate`). Nullable: a project
+nobody has typed yet is held to every kind, which is what every project was before 048.
+Backfilled from `departmentType`, where the data loads wrote "Government" / "Private".']
+  departmentType String [note: 'Free text — the department or authority (PWD, NHAI). Before 048 the data loads also used it
+for Government / Private; that now lives in `sector`.']
   projectType String
   siteType ProjectSiteType [not null, default: 'site']
   isHO Boolean [not null, default: false]
@@ -1030,6 +1035,9 @@ project would quietly apply one contract\'s to another\'s bill. It does not reac
 direction: a project has exactly one client and one client agreement, so for that direction
 the project *is* the contract. A bill to a subcontractor still reads
 `WorkOrder.retentionPercent`, which is that subcontract\'s own term.']
+  clientCpbgFraction Decimal [note: 'The client\'s **CPBG** term as a fraction — the contract performance bank guarantee the client
+deducts from payments until a PBG is submitted (048). The client sheet\'s "Client CPBG %".
+Null means not recorded; it only pre-fills a receipt\'s CPBG deduction and never decides one.']
   description String
   sites Site [not null]
   boqTaskGroups BOQTaskGroup [not null]
@@ -1044,6 +1052,8 @@ the project *is* the contract. A bill to a subcontractor still reads
   budgets ProjectBudget [not null]
   documents ProjectDocument [not null]
   bgTenders BgTender [not null]
+  clientReceipts ClientBillReceipt [not null]
+  clientHoldReleases ClientHoldRelease [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -1128,6 +1138,13 @@ What makes it different, and why it is a flag: it is billed **at the rate entere
 tender premium** (an extra item is priced by agreement or analysis, not by the bid); it has no
 scope, so it is never "over scope"; and no daily work report measures it, so a bill proposes
 nothing for it and the quantity is the one entered on the bill.']
+  pricingBasis BoqPricingBasis [not null, default: 'percentage', note: 'How this line is priced against the client (047). `percentage` — the schedule rate with the
+project\'s quoted percentage applied, which is what a "Percentage BoQ" tender means; `item_rate`
+— the bidder\'s own rate, as quoted, with no percentage on top. A tender may carry both kinds
+in separate schedules, and applying the quoted percentage to item-rate lines bills them wrong.
+
+Default `percentage`, so every line that existed before 047 prices exactly as it did.
+Fixed once a client bill measures the line — see `BoqService.planItem`.']
   dwrTasks DWRTask [not null]
   clientBillLines ClientBillLine [not null]
   awardLines WorkOrderBOQItem [not null]
@@ -1486,6 +1503,7 @@ are what make it open.']
   updatedAt DateTime [not null]
   lines ClientBillLine [not null]
   package BillPackage [note: 'The 023 package, where this bill has been made into one. A relation field, not a column.']
+  receipts ClientBillReceipt [not null, note: 'Money the client paid against this bill, with what it held back (048).']
 
   indexes {
     (projectId, billNumber) [unique]
@@ -1956,6 +1974,56 @@ Append-only, like every other ledger in this product. A release is money leaving
 one by editing the row would leave no trace that it had been for a different amount yesterday.'
 }
 
+Table ClientBillReceipt {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null, note: 'Denormalised from the bill so a project\'s held balance is one indexed query.']
+  project Project [not null]
+  clientBillId String [not null, note: '`Restrict`: a bill with money recorded against it is not a bill anybody deletes.']
+  clientBill ClientBill [not null]
+  receivedOn DateTime [not null]
+  amount Decimal [not null, note: 'What actually arrived in the bank.']
+  retentionAmount Decimal [not null, default: 0, note: 'Retention the client withheld from this payment.']
+  cpbgAmount Decimal [not null, default: 0, note: 'CPBG the client deducted from this payment, in place of a PBG.']
+  tdsAmount Decimal [not null, default: 0, note: 'Tax deducted at source — a credit against our tax, not money the client holds.']
+  otherDeduction Decimal [not null, default: 0, note: 'Anything else deducted (a penalty, a recovery), with what it was.']
+  otherDeductionNote String
+  instrument PaymentInstrument [not null]
+  reference String
+  remarks String
+  recordedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note.']
+  recordedAt DateTime [default: `now()`, not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'Money a **client** paid against one of our bills, and what it held back from it (048).
+
+The mirror of `RABillPayment` in the other direction. Until 048 a client bill stopped at
+`certified`: nothing recorded that it had been paid, or what the client deducted when it paid,
+so how much of our money the client is holding could not be answered.
+
+The bill is settled by `amount + retentionAmount + cpbgAmount + tdsAmount + otherDeduction`.
+There is no stored outstanding or held balance — both are derived on read, as `RABillPayment`\'s
+note explains.'
+}
+
+Table ClientHoldRelease {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  kind ClientHoldKind [not null]
+  amount Decimal [not null, note: 'Always positive; refused above what the client still holds of this kind.']
+  releasedOn DateTime [not null]
+  reason String [not null]
+  bankGuaranteeId String [note: 'For a CPBG refund: the PBG whose submission triggered it, where there is one.']
+  bankGuarantee BankGuarantee
+  recordedByUserId String
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'Retention the client released, or CPBG it refunded (048). Append-only, like `RetentionRelease`.'
+}
+
 Table WorkOrderBOQItem {
   id String [pk]
   companyId String [not null]
@@ -2119,6 +2187,9 @@ start this project" from "we are still chasing paperwork".
 
 A kind cannot be marked mandatory while the company has no document type for it (FR-007d):
 that would refuse every creation with no way to comply.']
+  forGovernment Boolean [not null, default: true, note: 'Which project types this kind is required of (048). Both true by default, which is what every
+requirement meant before project types existed. A project with no type is held to every row.']
+  forPrivate Boolean [not null, default: true]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -3867,6 +3938,11 @@ would make every rate revision a migration.']
   description String
   active Boolean [not null, default: true, note: 'Soft-retired rather than deleted once stock history exists, so a purchase from
 two years ago still resolves its item name.']
+  dailyRate Boolean [not null, default: false, note: '050: the price moves day to day (diesel, cement). Its rate is kept as dated history in
+`inventory.ItemDailyRate` and offered on purchases, POs and fuel entries for their date;
+purchases of it are not locked to a vendor\'s agreed rate (028 FR-013).']
+  machineFuel Boolean [not null, default: false, note: '050: the fuel machines draw — what a Machinery fuel entry\'s rate is offered from. At most one
+per company, and always a daily-rate item.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -4126,6 +4202,31 @@ A familiar item from a vendor who has not supplied it before is a **first** purc
 contract is per vendor, and a vendor with no agreed rate has nothing to supply. That is a chosen
 limit, not a hole: blocking new suppliers would be worse, so the control there is visibility
 (FR-016) rather than refusal.'
+}
+
+Table ItemDailyRate {
+  id String [pk]
+  companyId String [not null]
+  itemId String [not null, note: '`settings.Item.id`, plain — Principle I, as `VendorItemRate.itemId`.']
+  vendorId String [note: '`partners.Vendor.id`, plain. Null means the market rate.']
+  rate Decimal [not null]
+  effectiveFrom DateTime [not null]
+  setByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: '050: the dated rate of a daily-rate item (diesel, cement) — "rates change on a day basis".
+
+One row per day the rate changed. `vendorId` null is the **market rate**, the company-wide
+price everyone is assumed to charge; a row with a vendor is that vendor\'s **override**. The rate
+in force on a date is the latest row on or before it, and between a vendor\'s override and the
+market, the more recent wins — so updating the market rate today moves every vendor who has no
+override of today. Never rewrites a purchase, PO or fuel entry already recorded: those carry
+their own rate, and this only offers one.
+
+At most one row per (company, item, vendor-or-market, day): two partial unique indexes in the
+migration, because Prisma 5 cannot declare a unique key over a nullable column that treats null
+as one value.'
 }
 
 Table GoodsReceiptNote {
@@ -6136,6 +6237,7 @@ sheet). Unique per company when present — a partial index in the migration.']
   updatedAt DateTime [not null]
   documents BankGuaranteeDocument [not null]
   events BankGuaranteeEvent [not null]
+  cpbgRefunds ClientHoldRelease [not null, note: 'CPBG refunds the client made because this PBG was submitted (048).']
 
   Note: 'One bank guarantee — EMD or PBG — under a tender (037).'
 }
@@ -6336,6 +6438,8 @@ Enum AuditEntityType {
   BOQ_GROUP
   BOQ_ITEM
   BOQ_IMPORT
+  CLIENT_RECEIPT
+  CLIENT_HOLD_RELEASE
   DWR
   REVENUE
   RA_BILL
@@ -6478,6 +6582,11 @@ Enum ProjectBudgetCategory {
   overheads
 }
 
+Enum BoqPricingBasis {
+  percentage
+  item_rate
+}
+
 Enum ClientBillStatus {
   draft
   submitted
@@ -6528,6 +6637,16 @@ Enum PaymentInstrument {
 Enum SignedCopySubject {
   ra_bill
   debit_note
+}
+
+Enum ProjectSector {
+  government
+  private
+}
+
+Enum ClientHoldKind {
+  retention
+  cpbg
 }
 
 Enum FaceEnrolmentStatus {
@@ -7327,6 +7446,14 @@ Ref: BillPackageDebitNote.recoveredOnPackageId > BillPackage.id [delete: Set Nul
 Ref: RABillPayment.raBillId > RABill.id [delete: Restrict]
 
 Ref: RetentionRelease.workOrderId > WorkOrder.id [delete: Cascade]
+
+Ref: ClientBillReceipt.projectId > Project.id [delete: Cascade]
+
+Ref: ClientBillReceipt.clientBillId > ClientBill.id [delete: Restrict]
+
+Ref: ClientHoldRelease.projectId > Project.id [delete: Cascade]
+
+Ref: ClientHoldRelease.bankGuaranteeId > BankGuarantee.id [delete: Set Null]
 
 Ref: WorkOrderBOQItem.workOrderId > WorkOrder.id [delete: Cascade]
 

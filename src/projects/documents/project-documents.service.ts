@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AuditAction, AuditEntityType } from '@prisma/client';
+import { AuditAction, AuditEntityType, ProjectSector } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { actorNamesFor } from '../../common/actor-name';
@@ -18,7 +18,10 @@ import {
   compressImageUpload,
   DOCUMENT_TYPES,
 } from '../../common/uploads';
-import { REQUIRED_PROJECT_DOCUMENT_KINDS } from '../../settings/document-kinds';
+import {
+  kindAppliesTo,
+  REQUIRED_PROJECT_DOCUMENT_KINDS,
+} from '../../settings/document-kinds';
 import { DocumentTypesService } from '../../settings/reference-data/document-types.service';
 import {
   PROJECT_DOCUMENTS_MANDATORY_MISSING,
@@ -37,6 +40,9 @@ export interface ProjectDocumentRequirementView {
   code: string;
   name: string;
   isMandatory: boolean;
+  /** Which project types the kind is required of (048). A project with no type: every kind. */
+  forGovernment: boolean;
+  forPrivate: boolean;
   /**
    * Whether the kind lapses, and whether it carries a printed number.
    *
@@ -166,6 +172,8 @@ export class ProjectDocumentsService {
           code: type.code,
           name: type.name,
           isMandatory: requirement.isMandatory,
+          forGovernment: requirement.forGovernment,
+          forPrivate: requirement.forPrivate,
           hasExpiry: type.hasExpiry,
           needsNumber: type.needsNumber,
         });
@@ -191,6 +199,8 @@ export class ProjectDocumentsService {
           code: type.code,
           name: type.name,
           isMandatory: true,
+          forGovernment: kindAppliesTo(kind, 'government'),
+          forPrivate: kindAppliesTo(kind, 'private'),
           hasExpiry: type.hasExpiry,
           needsNumber: type.needsNumber,
         });
@@ -350,6 +360,8 @@ export class ProjectDocumentsService {
             companyId,
             documentTypeId: r.documentTypeId,
             isMandatory: r.isMandatory ?? true,
+            forGovernment: r.forGovernment ?? true,
+            forPrivate: r.forPrivate ?? true,
           })),
         });
       }
@@ -363,6 +375,8 @@ export class ProjectDocumentsService {
         requirements: rows.map((r) => ({
           documentTypeId: r.documentTypeId,
           isMandatory: r.isMandatory ?? true,
+          forGovernment: r.forGovernment ?? true,
+          forPrivate: r.forPrivate ?? true,
         })),
       },
       accountId: actor.userId,
@@ -408,11 +422,19 @@ export class ProjectDocumentsService {
     );
     if (projectIds.length === 0) return readiness;
 
-    const { mandatory: required, advisory } = await this.partitionedTypeIdsFor(
-      ctx,
-      companyId,
-    );
+    const partitions = await this.partitionedRequirementsFor(ctx, companyId);
+    const required = partitions.mandatory.map((r) => r.documentTypeId);
+    const advisory = partitions.advisory.map((r) => r.documentTypeId);
     if (required.length === 0 && advisory.length === 0) return readiness;
+
+    // 048: each project is held only to the kinds its type requires. Same schema, one query.
+    const sectors = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.project.findMany({
+        where: { id: { in: projectIds } },
+        select: { id: true, sector: true },
+      }),
+    );
+    const sectorOf = new Map(sectors.map((p) => [p.id, p.sector]));
 
     // One statement for the whole page. `documentTypeId: { in: required }` bounds the
     // result at projects × required kinds however many documents a project holds, and
@@ -448,15 +470,22 @@ export class ProjectDocumentsService {
 
     for (const projectId of projectIds) {
       const has = heldBy.get(projectId) ?? new Set<string>();
-      const missingTypeIds = required.filter((id) => !has.has(id));
-      const advisoryMissingTypeIds = advisory.filter((id) => !has.has(id));
+      const sector = sectorOf.get(projectId) ?? null;
+      const mine = (rows: SectorScopedRequirement[]) =>
+        rows
+          .filter((r) => requirementApplies(r, sector))
+          .map((r) => r.documentTypeId);
+      const ownRequired = mine(partitions.mandatory);
+      const ownAdvisory = mine(partitions.advisory);
+      const missingTypeIds = ownRequired.filter((id) => !has.has(id));
+      const advisoryMissingTypeIds = ownAdvisory.filter((id) => !has.has(id));
       readiness.set(projectId, {
         // Mandatory only, unchanged. This figure is already on the portfolio list.
-        required: required.length,
-        present: required.length - missingTypeIds.length,
+        required: ownRequired.length,
+        present: ownRequired.length - missingTypeIds.length,
         missingTypeIds,
-        advisoryRequired: advisory.length,
-        advisoryPresent: advisory.length - advisoryMissingTypeIds.length,
+        advisoryRequired: ownAdvisory.length,
+        advisoryPresent: ownAdvisory.length - advisoryMissingTypeIds.length,
         advisoryMissingTypeIds,
       });
     }
@@ -497,6 +526,49 @@ export class ProjectDocumentsService {
     companyId: string,
   ): Promise<string[]> {
     return (await this.partitionedTypeIdsFor(ctx, companyId)).mandatory;
+  }
+
+  /**
+   * The same partitions with each row's project-type flags (048), from the same one query. The
+   * shipped defaults carry the flags `REQUIRED_PROJECT_DOCUMENT_KINDS` declares.
+   */
+  private async partitionedRequirementsFor(
+    ctx: RlsContext,
+    companyId: string,
+  ): Promise<{
+    mandatory: SectorScopedRequirement[];
+    advisory: SectorScopedRequirement[];
+  }> {
+    const configured = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.projectDocumentRequirement.findMany({
+        where: { companyId },
+        select: {
+          documentTypeId: true,
+          isMandatory: true,
+          forGovernment: true,
+          forPrivate: true,
+        },
+      }),
+    );
+    if (configured.length > 0) {
+      return {
+        mandatory: configured.filter((r) => r.isMandatory),
+        advisory: configured.filter((r) => !r.isMandatory),
+      };
+    }
+    const types = await this.documentTypes.listForCompany(companyId);
+    const byCode = new Map(types.map((t) => [t.code.toUpperCase(), t]));
+    const mandatory: SectorScopedRequirement[] = [];
+    for (const kind of REQUIRED_PROJECT_DOCUMENT_KINDS) {
+      const type = byCode.get(kind.code.toUpperCase());
+      if (!type) continue;
+      mandatory.push({
+        documentTypeId: type.id,
+        forGovernment: kindAppliesTo(kind, 'government'),
+        forPrivate: kindAppliesTo(kind, 'private'),
+      });
+    }
+    return { mandatory, advisory: [] };
   }
 
   /**
@@ -636,7 +708,12 @@ export class ProjectDocumentsService {
         // document deletes nothing here rather than throwing after the new row is written.
         const old = await tx.projectDocument.findFirst({
           where: { id: input.supersedesDocumentId, projectId, companyId },
-          select: { id: true, fileRef: true, fileName: true, documentType: true },
+          select: {
+            id: true,
+            fileRef: true,
+            fileName: true,
+            documentType: true,
+          },
         });
         if (old) {
           await tx.projectDocument.deleteMany({ where: { id: old.id } });
@@ -907,6 +984,8 @@ export class ProjectDocumentsService {
     companyId: string,
     stagedIds: string[],
     actorUserId: string,
+    /** 048: the new project's type. Null holds it to every mandatory kind, as before. */
+    sector: ProjectSector | null = null,
   ): Promise<
     {
       id: string;
@@ -947,11 +1026,13 @@ export class ProjectDocumentsService {
       });
     }
 
-    const requirements = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.projectDocumentRequirement.findMany({
-        where: { companyId, isMandatory: true },
-      }),
-    );
+    const requirements = (
+      await withRlsContext(this.prisma, ctx, (tx) =>
+        tx.projectDocumentRequirement.findMany({
+          where: { companyId, isMandatory: true },
+        }),
+      )
+    ).filter((requirement) => requirementApplies(requirement, sector));
 
     const attached = new Set(
       [...usable.values()]
@@ -1118,4 +1199,26 @@ function dayStart(iso: string): Date {
 /** Today as an ISO day. Extracted so the readiness rule has one definition of "now". */
 function today(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** A requirement row's project-type flags (048). */
+interface SectorScopedRequirement {
+  documentTypeId: string;
+  forGovernment: boolean;
+  forPrivate: boolean;
+}
+
+/**
+ * Whether a requirement applies to a project of this type (048). A project with no type is held to
+ * every requirement — what every project was before types existed — so an untyped project can
+ * never be reported more ready than it would have been.
+ */
+export function requirementApplies(
+  requirement: { forGovernment?: boolean; forPrivate?: boolean },
+  sector: ProjectSector | null,
+): boolean {
+  if (sector === null) return true;
+  return sector === ProjectSector.government
+    ? requirement.forGovernment !== false
+    : requirement.forPrivate !== false;
 }

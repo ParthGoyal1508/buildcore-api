@@ -344,6 +344,8 @@ export class ProjectsService {
       targetCompanyId,
       dto.stagedDocumentIds ?? [],
       caller.id,
+      // 048: the kinds demanded depend on whether this is a government or a private project.
+      dto.sector ?? null,
     );
 
     const created = await withRlsContext(
@@ -396,6 +398,7 @@ export class ProjectsService {
             status: dto.status ?? ProjectStatus.planning,
             projectManagerEmployeeId: dto.projectManagerEmployeeId ?? null,
             ...(dto.division !== undefined ? { division: dto.division } : {}),
+            sector: dto.sector ?? null,
             departmentType: dto.departmentType ?? null,
             projectType: dto.projectType ?? null,
             ...(dto.siteType !== undefined ? { siteType: dto.siteType } : {}),
@@ -410,6 +413,7 @@ export class ProjectsService {
             // retention term is refused by name, and a zero would instead produce a payable five
             // per cent too high that nothing downstream would question (025 FR-019).
             clientRetentionFraction: dto.clientRetentionFraction ?? null,
+            clientCpbgFraction: dto.clientCpbgFraction ?? null,
             description: dto.description ?? null,
           },
         });
@@ -836,6 +840,10 @@ export class ProjectsService {
             ...(dto.clientRetentionFraction !== undefined
               ? { clientRetentionFraction: dto.clientRetentionFraction }
               : {}),
+            ...(dto.clientCpbgFraction !== undefined
+              ? { clientCpbgFraction: dto.clientCpbgFraction }
+              : {}),
+            ...(dto.sector !== undefined ? { sector: dto.sector } : {}),
             ...(dto.description !== undefined
               ? { description: dto.description || null }
               : {}),

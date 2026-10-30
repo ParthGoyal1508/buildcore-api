@@ -52,3 +52,5 @@ src/metadata.ts
 
 # Client source documents (formats, BOQs, salary sheets) — reference material kept locally, not in git.
 docs/
+# 047: the client's real tender workbooks — local only, like docs/. Tests skip without them.
+test/fixtures/tenders/

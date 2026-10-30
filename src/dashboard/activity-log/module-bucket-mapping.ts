@@ -118,6 +118,9 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
     AuditEntityType.PROJECT_DOCUMENT,
     // 037: tenders, their guarantees and documents, as one entity type.
     AuditEntityType.BANK_GUARANTEE,
+    // 048: money received from a client, and retention / CPBG it released.
+    AuditEntityType.CLIENT_RECEIPT,
+    AuditEntityType.CLIENT_HOLD_RELEASE,
   ],
   inventory: [
     AuditEntityType.ITEM_CATEGORY,

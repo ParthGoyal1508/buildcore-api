@@ -59,7 +59,10 @@ function serviceWith(
   const prisma = {
     $transaction: (fn: (client: typeof tx) => Promise<unknown>) => fn(tx),
   };
-  return { service: new BoqService(prisma as never), tx };
+  return {
+    service: new BoqService(prisma as never, { record: jest.fn() } as never),
+    tx,
+  };
 }
 
 const CTX = { isSuperAdmin: false, companyId: 'company-1' };
@@ -298,5 +301,144 @@ describe('BoqService and the estimate variant', () => {
     expect(tree).toHaveLength(1);
     expect(tree[0].isEstimate).toBe(true);
     expect(tree[0].items[0].isEstimate).toBe(true);
+  });
+});
+
+describe('BoqService — 047', () => {
+  function build(tx: Record<string, unknown>) {
+    const audit = { record: jest.fn() };
+    const prisma = {
+      $transaction: (fn: (client: unknown) => Promise<unknown>) =>
+        fn({ $executeRaw: jest.fn().mockResolvedValue(0), ...tx }),
+    };
+    return { service: new BoqService(prisma as never, audit as never), audit };
+  }
+  const ACTOR = {
+    accountId: 'user-1',
+    companyId: 'company-1',
+    ipAddress: '10.0.0.1',
+  };
+
+  describe('deleteGroup', () => {
+    const group = (items: number) => ({
+      bOQTaskGroup: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'group-1',
+          boqNo: '3',
+          name: 'Electrical',
+          isEstimate: false,
+          _count: { items },
+        }),
+        delete: jest.fn().mockResolvedValue({}),
+      },
+    });
+
+    it('deletes an empty section, and audits the delete', async () => {
+      const tx = group(0);
+      const { service, audit } = build(tx);
+      await expect(
+        service.deleteGroup(CTX, 'project-1', 'group-1', ACTOR),
+      ).resolves.toEqual({ id: 'group-1' });
+      expect(tx.bOQTaskGroup.delete).toHaveBeenCalledWith({
+        where: { id: 'group-1' },
+      });
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ entityType: 'BOQ_GROUP', action: 'DELETE' }),
+      );
+    });
+
+    it('refuses a section that still holds lines, naming how many', async () => {
+      const tx = group(4);
+      const { service, audit } = build(tx);
+      await service.deleteGroup(CTX, 'project-1', 'group-1', ACTOR).then(
+        () => {
+          throw new Error('expected a refusal');
+        },
+        (error: unknown) => {
+          expect(error).toBeInstanceOf(ConflictException);
+          const body = (error as ConflictException).getResponse() as {
+            code: string;
+            message: string;
+          };
+          expect(body.code).toBe('BOQ_GROUP_NOT_EMPTY');
+          expect(body.message).toContain('4 lines');
+        },
+      );
+      expect(tx.bOQTaskGroup.delete).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('pricing basis on a line', () => {
+    const itemTx = (billed: number) => ({
+      bOQTaskGroup: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'group-1' }),
+      },
+      bOQTaskItem: {
+        findFirst: jest.fn().mockResolvedValue({
+          ...line({ nonBoq: false, pricingBasis: 'percentage' }),
+          _count: { clientBillLines: billed },
+        }),
+        update: jest.fn(({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve({
+            ...line({ nonBoq: false, pricingBasis: 'percentage' }),
+            ...data,
+          }),
+        ),
+        create: jest.fn().mockResolvedValue({ id: 'item-2' }),
+      },
+    });
+
+    it('defaults a hand-entered line to percentage, and takes item_rate when sent', async () => {
+      const tx = itemTx(0);
+      const { service } = build(tx);
+      const base = {
+        groupId: 'group-1',
+        boqNo: '9',
+        taskName: 'Solar light',
+        unit: 'Each',
+        scopeQty: '3',
+        rate: '105000',
+      };
+      await service.createItem(CTX, 'project-1', base, 'company-1');
+      await service.createItem(
+        CTX,
+        'project-1',
+        { ...base, pricingBasis: 'item_rate' },
+        'company-1',
+      );
+      const written = tx.bOQTaskItem.create.mock.calls.map(
+        (call) => call[0].data.pricingBasis,
+      );
+      expect(written).toEqual(['percentage', 'item_rate']);
+    });
+
+    it('changes the basis of an unbilled line', async () => {
+      const tx = itemTx(0);
+      const { service } = build(tx);
+      const view = await service.planItem(CTX, 'project-1', 'item-1', {
+        pricingBasis: 'item_rate',
+      });
+      expect(view.pricingBasis).toBe('item_rate');
+    });
+
+    it('refuses to change the basis of a billed line', async () => {
+      const tx = itemTx(2);
+      const { service } = build(tx);
+      await service
+        .planItem(CTX, 'project-1', 'item-1', { pricingBasis: 'item_rate' })
+        .then(
+          () => {
+            throw new Error('expected a refusal');
+          },
+          (error: unknown) => {
+            expect(
+              ((error as ConflictException).getResponse() as { code: string })
+                .code,
+            ).toBe('BOQ_PRICING_BASIS_LOCKED');
+          },
+        );
+      expect(tx.bOQTaskItem.update).not.toHaveBeenCalled();
+    });
   });
 });

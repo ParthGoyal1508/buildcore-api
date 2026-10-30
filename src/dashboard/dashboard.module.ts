@@ -39,6 +39,7 @@ import {
 } from './reports/plant-reports.provider';
 import { PayrollReportProvider } from './reports/payroll-report.provider';
 import {
+  ClientHoldingsReportProvider,
   PnlReportProvider,
   ProjectCostReportProvider,
 } from './reports/project-reports.provider';
@@ -150,6 +151,7 @@ const REPORT_CLASSES = [
   FuelReportProvider,
   ProjectCostReportProvider,
   PnlReportProvider,
+  ClientHoldingsReportProvider,
   PayrollReportProvider,
 ] as const;
 

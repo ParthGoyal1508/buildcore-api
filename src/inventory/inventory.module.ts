@@ -29,6 +29,8 @@ import { PurchaseOrdersController } from './purchase-orders/purchase-orders.cont
 import { PurchaseOrdersService } from './purchase-orders/purchase-orders.service';
 import { PurchasesController } from './purchases/purchases.controller';
 import { PurchasesService } from './purchases/purchases.service';
+import { DailyRatesController } from './rates/daily-rates.controller';
+import { DailyRatesService } from './rates/daily-rates.service';
 import { VendorItemRateService } from './rates/vendor-item-rate.service';
 import { SiteEntriesController } from './site-entries/site-entries.controller';
 import { SiteEntriesService } from './site-entries/site-entries.service';
@@ -81,6 +83,7 @@ import { TransfersService } from './transfers/transfers.service';
     StoreDocumentsController,
     PurchaseOrdersController,
     InventoryExportsController,
+    DailyRatesController,
   ],
   providers: [
     StockService,
@@ -89,6 +92,7 @@ import { TransfersService } from './transfers/transfers.service';
     SiteEntriesService,
     PurchaseOrdersService,
     VendorItemRateService,
+    DailyRatesService,
     IssuesService,
     TransfersService,
     PaymentsService,
@@ -106,6 +110,7 @@ import { TransfersService } from './transfers/transfers.service';
   // Exported for 008's Project P&L, which sums material cost from this module
   // (FR-009). `ItemsService` goes with it so a future consumer of the item master
   // has a service to call rather than a table to query.
-  exports: [InventoryService, ItemsService],
+  // `DailyRatesService` for 050: Machinery's fuel entry is offered the diesel rate of its date.
+  exports: [InventoryService, ItemsService, DailyRatesService],
 })
 export class InventoryModule {}

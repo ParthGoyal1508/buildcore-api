@@ -29,6 +29,8 @@ function harness(
     requirements?: Requirement[];
     documents?: DocRow[];
     types?: TypeRow[];
+    /** 048: each project's type. Absent projects read as untyped. */
+    sectors?: Record<string, 'government' | 'private' | null>;
   } = {},
 ) {
   const calls: string[] = [];
@@ -52,6 +54,15 @@ function harness(
       findMany: jest.fn(async () => {
         calls.push('projectDocument.findMany');
         return opts.documents ?? [];
+      }),
+    },
+    project: {
+      findMany: jest.fn(async (args: { where: { id: { in: string[] } } }) => {
+        calls.push('project.findMany');
+        return args.where.id.in.map((id) => ({
+          id,
+          sector: opts.sectors?.[id] ?? null,
+        }));
       }),
     },
     // `withRlsContext` sets the session variables the policies read before it runs the
@@ -126,6 +137,8 @@ describe('ProjectDocumentsService.readinessFor (FR-008, T021, T024)', () => {
     // grows at all with the page is the N+1 this exists to prevent.
     expect(many.calls).toEqual([
       'projectDocumentRequirement.findMany',
+      // 048: one read of the page's project types — constant too.
+      'project.findMany',
       'projectDocument.findMany',
     ]);
     expect(many.calls).toEqual(one.calls);
@@ -330,6 +343,8 @@ describe('ProjectDocumentsService.setRequirements (FR-007, T020)', () => {
             companyId: COMPANY,
             documentTypeId: shippedTypes[0].id,
             isMandatory: true,
+            forGovernment: true,
+            forPrivate: true,
           },
         ],
       }),

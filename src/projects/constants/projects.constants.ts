@@ -1,3 +1,5 @@
+import { ProjectStatus } from '@prisma/client';
+
 /**
  * Tunable values for the Projects module.
  *
@@ -56,3 +58,16 @@ export const HTTP_STATUS_LOCKED = 423;
  */
 export const PROJECT_LOCK_PERMISSION_REQUIRED =
   'PROJECT_LOCK_PERMISSION_REQUIRED';
+
+/**
+ * Project statuses that raise no reminders (049, 2026-10-29): a completed project's papers are
+ * history, not tasks — "we need to not show the reminders … for projects which are completed".
+ *
+ * `completed` only. `on_hold` is a pause, not a close: the site still stands, its insurance still
+ * covers it, and the work resumes. `planning` is a project being set up, whose papers are exactly
+ * the ones to chase. Reopening a project (any status other than these) brings its reminders back,
+ * because rules read the status every time they evaluate — nothing is deleted.
+ */
+export const UNREMINDED_PROJECT_STATUSES: ProjectStatus[] = [
+  ProjectStatus.completed,
+];
