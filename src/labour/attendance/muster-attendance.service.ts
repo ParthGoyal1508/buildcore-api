@@ -31,6 +31,7 @@ import {
   type SiteOption,
 } from '../supervisor-sites/supervisor-site.service';
 import { parseDateOnly } from '../wage-rates/wage-rate.service';
+import { siteOnDate } from '../workers/worker-site';
 import { LabourDayService } from './labour-day.service';
 import {
   deriveLabourDay,
@@ -427,24 +428,34 @@ export class MusterAttendanceService {
       throw new BadRequestException('That date has not happened yet.');
     }
 
-    const { worker, existing } = await withRlsContext(
+    const { worker, existing, siteThen } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      async (tx) => ({
-        worker: await tx.labourWorker.findUnique({
+      async (tx) => {
+        const worker = await tx.labourWorker.findUnique({
           where: { id: dto.workerId },
-        }),
-        existing: await tx.labourPunch.findMany({
-          where: { workerId: dto.workerId, punchDate: parseDateOnly(dto.date) },
-        }),
-      }),
+        });
+        return {
+          worker,
+          existing: await tx.labourPunch.findMany({
+            where: {
+              workerId: dto.workerId,
+              punchDate: parseDateOnly(dto.date),
+            },
+          }),
+          siteThen: worker
+            ? await siteOnDate(tx, worker, parseDateOnly(dto.date))
+            : null,
+        };
+      },
     );
     if (!worker || worker.deletedAt) {
       throw new NotFoundException('Labour not found');
     }
     assertInScope(caller, worker, 'Labour');
-    // The day belongs to the site it was punched at; a day with no punch at all, to the worker's site.
-    const siteId = existing[0]?.siteId ?? worker.siteId;
+    // The day belongs to the site it was punched at; a day with no punch at all, to the site the
+    // worker was at on that date (052: a transfer moves them from its day on).
+    const siteId = existing[0]?.siteId ?? siteThen ?? worker.siteId;
     await this.supervisorSites.assertSiteAllowed(caller, siteId);
 
     if (dto.punchOutNextDay && !dto.punchOut) {
@@ -628,16 +639,24 @@ export class MusterAttendanceService {
 
   /** The edits to one worker's day, newest first. */
   async history(caller: AuthenticatedUser, workerId: string, date: string) {
-    const { worker, rows } = await withRlsContext(
+    const { worker, rows, siteThen } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      async (tx) => ({
-        worker: await tx.labourWorker.findUnique({ where: { id: workerId } }),
-        rows: await tx.labourPunchCorrection.findMany({
-          where: { workerId, punchDate: parseDateOnly(date) },
-          orderBy: { createdAt: 'desc' },
-        }),
-      }),
+      async (tx) => {
+        const worker = await tx.labourWorker.findUnique({
+          where: { id: workerId },
+        });
+        return {
+          worker,
+          rows: await tx.labourPunchCorrection.findMany({
+            where: { workerId, punchDate: parseDateOnly(date) },
+            orderBy: { createdAt: 'desc' },
+          }),
+          siteThen: worker
+            ? await siteOnDate(tx, worker, parseDateOnly(date))
+            : null,
+        };
+      },
     );
     if (!worker || worker.deletedAt) {
       throw new NotFoundException('Labour not found');
@@ -645,7 +664,7 @@ export class MusterAttendanceService {
     assertInScope(caller, worker, 'Labour');
     await this.supervisorSites.assertSiteAllowed(
       caller,
-      rows[0]?.siteId ?? worker.siteId,
+      rows[0]?.siteId ?? siteThen ?? worker.siteId,
     );
     const names = await this.refs.userNames(rows.map((r) => r.correctedById));
     return rows.map((r) => ({

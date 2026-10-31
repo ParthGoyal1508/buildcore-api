@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,7 +10,10 @@ import {
   AuditEntityType,
   EngagementType,
   LabourGender,
+  LabourPunchType,
+  Permission,
   Prisma,
+  SiteStatus,
   WorkerStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
@@ -29,14 +33,18 @@ import {
 } from '../../hr/biometrics/biometrics.service';
 import { ImageProcessingService } from '../../hr/biometrics/image-processing.service';
 import { decodePhotoPayload } from '../../hr/biometrics/photo-payload';
+import { zonedDateOnly } from '../../hr/leave/leave-days';
 import {
   DEFAULT_PAGE_SIZE,
   LABOUR_CODE_PAD,
   LABOUR_CODE_PREFIX,
+  LABOUR_WORKER_ERRORS,
   MAX_PAGE_SIZE,
   PII_VISIBLE_CHARS,
   WORKER_FACE_NAMESPACE,
 } from '../constants/labour.constants';
+import { parseDateOnly } from '../wage-rates/wage-rate.service';
+import { planWorkerEdit, WorkerEditInput } from './worker-edit.util';
 import { NocsService } from '../../nocs/nocs.service';
 import { LabourRefsService } from '../labour-refs.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
@@ -59,11 +67,25 @@ export interface WorkerListItem {
   skillCategoryId: string | null;
   engagementType: EngagementType;
   contractorId: string | null;
+  /** 052: the contractor's (vendor's) name, null for a direct worker. */
+  contractorName: string | null;
   siteId: string;
   status: WorkerStatus;
   aadhaarNumber: string | null;
   bankAccount: string | null;
   faceEnrolled: boolean;
+}
+
+/** 052: the detail view — the list item plus what the edit form needs and the site history. */
+export interface WorkerDetail extends WorkerListItem {
+  rateOverride: number | null;
+  dateOfBirth: string | null;
+  transfers: {
+    fromSiteId: string;
+    toSiteId: string;
+    transferredOn: string;
+    reason: string | null;
+  }[];
 }
 
 export interface WorkerListPage {
@@ -86,22 +108,25 @@ export class LabourWorkerService {
     private readonly nocs: NocsService,
   ) {}
 
-  private toListItem(row: {
-    id: string;
-    labourCode: string;
-    fullName: string;
-    fatherName: string | null;
-    gender: LabourGender | null;
-    phone: string | null;
-    skillCategoryId: string | null;
-    engagementType: EngagementType;
-    contractorId: string | null;
-    siteId: string;
-    status: WorkerStatus;
-    aadhaarNumber: string | null;
-    bankAccount: string | null;
-    faceEnrolmentId: string | null;
-  }): WorkerListItem {
+  private toListItem(
+    row: {
+      id: string;
+      labourCode: string;
+      fullName: string;
+      fatherName: string | null;
+      gender: LabourGender | null;
+      phone: string | null;
+      skillCategoryId: string | null;
+      engagementType: EngagementType;
+      contractorId: string | null;
+      siteId: string;
+      status: WorkerStatus;
+      aadhaarNumber: string | null;
+      bankAccount: string | null;
+      faceEnrolmentId: string | null;
+    },
+    contractorNames: Map<string, string> = new Map(),
+  ): WorkerListItem {
     return {
       id: row.id,
       labourCode: row.labourCode,
@@ -112,6 +137,9 @@ export class LabourWorkerService {
       skillCategoryId: row.skillCategoryId,
       engagementType: row.engagementType,
       contractorId: row.contractorId,
+      contractorName: row.contractorId
+        ? contractorNames.get(row.contractorId) ?? null
+        : null,
       siteId: row.siteId,
       status: row.status,
       aadhaarNumber: maskPii(row.aadhaarNumber),
@@ -194,31 +222,74 @@ export class LabourWorkerService {
       },
     );
 
+    const contractorNames = await this.refs.contractorNames(
+      caller,
+      items.map((row) => row.contractorId),
+    );
     return {
-      items: items.map((row) => this.toListItem(row)),
+      items: items.map((row) => this.toListItem(row, contractorNames)),
       total,
       page,
       pageSize,
     };
   }
 
-  /** Masked worker detail. */
-  async findOne(
-    caller: AuthenticatedUser,
-    id: string,
-  ): Promise<WorkerListItem & { rateOverride: number | null }> {
+  /** Masked worker detail, with what the edit form needs and the site history (052). */
+  async findOne(caller: AuthenticatedUser, id: string): Promise<WorkerDetail> {
     const row = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
-      tx.labourWorker.findUnique({ where: { id } }),
+      tx.labourWorker.findUnique({
+        where: { id },
+        include: { transfers: { orderBy: { createdAt: 'asc' } } },
+      }),
     );
     if (!row || row.deletedAt) {
       throw new NotFoundException(`Worker ${id} not found`);
     }
     assertInScope(caller, row, `Worker ${id}`);
     await this.assertSiteVisible(caller, row.siteId, id);
+    return this.toDetail(caller, row);
+  }
+
+  private async toDetail(
+    caller: AuthenticatedUser,
+    row: Parameters<LabourWorkerService['toListItem']>[0] & {
+      rateOverride: Prisma.Decimal | null;
+      dateOfBirth: Date | null;
+      transfers?: {
+        fromSiteId: string;
+        toSiteId: string;
+        transferredOn: Date;
+        reason: string | null;
+      }[];
+    },
+  ): Promise<WorkerDetail> {
+    const contractorNames = await this.refs.contractorNames(caller, [
+      row.contractorId,
+    ]);
     return {
-      ...this.toListItem(row),
+      ...this.toListItem(row, contractorNames),
       rateOverride: row.rateOverride ? row.rateOverride.toNumber() : null,
+      dateOfBirth: row.dateOfBirth
+        ? row.dateOfBirth.toISOString().slice(0, 10)
+        : null,
+      transfers: (row.transfers ?? []).map((t) => ({
+        fromSiteId: t.fromSiteId,
+        toSiteId: t.toSiteId,
+        transferredOn: t.transferredOn.toISOString().slice(0, 10),
+        reason: t.reason,
+      })),
     };
+  }
+
+  /**
+   * 052: the active vendors a worker may be engaged through, for the contractor picker. Any active
+   * vendor of the company is accepted (FR-008); labour contractors are listed first.
+   */
+  async contractorOptions(caller: AuthenticatedUser, companyId?: string) {
+    return this.refs.contractorOptions(
+      caller,
+      resolveCompanyId(caller, companyId),
+    );
   }
 
   /**
@@ -248,6 +319,9 @@ export class LabourWorkerService {
     ipAddress: string,
   ): Promise<WorkerListItem> {
     const companyId = resolveCompanyId(caller, dto.companyId);
+    if (dto.rateOverride !== undefined && dto.rateOverride !== null) {
+      this.assertMaySetRate(caller);
+    }
     await this.supervisorSites.assertSiteAllowed(caller, dto.siteId);
     // 036 O14: the HR office and cross-company callers pass `assertSiteAllowed` for any id, and
     // `LabourWorker.siteId` has no foreign key — so the site is looked up and its company compared,
@@ -262,9 +336,10 @@ export class LabourWorkerService {
     const engagementType = dto.engagementType ?? EngagementType.direct;
     if (engagementType === EngagementType.contractor) {
       if (!dto.contractorId) {
-        throw new BadRequestException(
-          'A contractor is required for a contractor-engaged worker',
-        );
+        throw new BadRequestException({
+          code: LABOUR_WORKER_ERRORS.CONTRACTOR_REQUIRED,
+          message: 'A contractor is required for a contractor-engaged worker',
+        });
       }
       await this.refs.assertActiveContractor(
         caller,
@@ -297,6 +372,7 @@ export class LabourWorkerService {
             });
             if (clash) {
               throw new ConflictException({
+                code: LABOUR_WORKER_ERRORS.AADHAAR_EXISTS,
                 message: 'A worker with this Aadhaar already exists',
                 existingWorkerId: clash.id,
               });
@@ -348,6 +424,234 @@ export class LabourWorkerService {
       ipAddress,
     });
     return this.toListItem(created);
+  }
+
+  /**
+   * Edits a worker's registration details (052), keeping the labour code, site and face. Validation
+   * matches registration: a contractor-engaged worker needs an active contractor of the company,
+   * an Aadhaar may not belong to another active worker (409), a skill must exist, and changing the
+   * special daily rate needs LABOUR_APPROVE (403) — the permission site rates need.
+   *
+   * Nothing already priced changes. A payment sheet line keeps the rate, days, gross and contractor
+   * it was generated with; the edit reaches a sheet only when one is generated, or a draft
+   * regenerated, afterwards — and then for that sheet's whole period, because rates and gender are
+   * not dated. Punches and the musters built from them carry no worker detail, so they are as
+   * recorded. The audit entry names the changed fields and never their values.
+   */
+  async update(
+    caller: AuthenticatedUser,
+    id: string,
+    dto: WorkerEditInput,
+    ipAddress: string,
+  ): Promise<WorkerDetail> {
+    const existing = await this.loadForWrite(caller, id);
+    const { next, changed } = planWorkerEdit(existing, dto);
+    if (changed.length === 0) {
+      return this.toDetail(caller, existing);
+    }
+
+    if (changed.includes('rateOverride')) this.assertMaySetRate(caller);
+    if (next.engagementType === EngagementType.contractor) {
+      if (!next.contractorId) {
+        throw new BadRequestException({
+          code: LABOUR_WORKER_ERRORS.CONTRACTOR_REQUIRED,
+          message: 'A contractor is required for a contractor-engaged worker',
+        });
+      }
+      // A contractor already on the record is not re-checked: one since made inactive should not
+      // stop somebody correcting the worker's mobile number.
+      if (changed.includes('contractorId')) {
+        await this.refs.assertActiveContractor(
+          caller,
+          next.contractorId,
+          existing.companyId,
+        );
+      }
+    }
+    if (changed.includes('skillCategoryId') && next.skillCategoryId) {
+      await this.refs.requireSkillCategory(caller, next.skillCategoryId);
+    }
+
+    const updated = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      async (tx) => {
+        if (changed.includes('aadhaarNumber') && next.aadhaarNumber) {
+          const clash = await tx.labourWorker.findFirst({
+            where: {
+              companyId: existing.companyId,
+              aadhaarNumber: next.aadhaarNumber,
+              status: WorkerStatus.active,
+              deletedAt: null,
+              id: { not: id },
+            },
+          });
+          if (clash) {
+            throw new ConflictException({
+              code: LABOUR_WORKER_ERRORS.AADHAAR_EXISTS,
+              message: 'A worker with this Aadhaar already exists',
+              existingWorkerId: clash.id,
+            });
+          }
+        }
+        return tx.labourWorker.update({
+          where: { id },
+          data: Object.fromEntries(
+            changed.map((field) => [field, next[field]]),
+          ),
+          include: { transfers: { orderBy: { createdAt: 'asc' } } },
+        });
+      },
+    );
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.LABOUR_WORKER,
+      action: AuditAction.UPDATE,
+      entityId: id,
+      accountId: caller.id,
+      companyId: existing.companyId,
+      ipAddress,
+      changes: { fields: changed },
+    });
+    return this.toDetail(caller, updated);
+  }
+
+  /**
+   * Moves an active worker to another active site of the same company (052). The caller must be
+   * able to work at both sites. From today the worker is listed and punched at the new site; the
+   * days already recorded stay with the old site's musters and payment sheets, because attendance
+   * belongs to the site it was punched at. The face template moves with the worker, and any gang
+   * membership is ended — gangs belong to a site. Refused while the worker is punched in and not
+   * yet out, so a day never starts at one site and ends at another. The move is kept as history.
+   */
+  async transfer(
+    caller: AuthenticatedUser,
+    id: string,
+    dto: { siteId: string; reason?: string },
+    ipAddress: string,
+  ): Promise<WorkerDetail> {
+    const worker = await this.loadForWrite(caller, id);
+    if (worker.status !== WorkerStatus.active) {
+      throw new BadRequestException({
+        code: LABOUR_WORKER_ERRORS.TRANSFER_WORKER_INACTIVE,
+        message: `${worker.fullName} is not active, so cannot be transferred.`,
+      });
+    }
+    if (dto.siteId === worker.siteId) {
+      throw new BadRequestException({
+        code: LABOUR_WORKER_ERRORS.TRANSFER_SAME_SITE,
+        message: `${worker.fullName} is already at this site.`,
+      });
+    }
+    // `LabourWorker.siteId` has no foreign key, so the target is looked up and its company
+    // compared, as registration does (036 O14).
+    const site = await this.refs.findSite(caller, dto.siteId);
+    if (!site || site.companyId !== worker.companyId) {
+      throw new BadRequestException({
+        code: LABOUR_WORKER_ERRORS.TRANSFER_SITE_NOT_FOUND,
+        message: 'Site not found in this company',
+      });
+    }
+    if (site.status !== SiteStatus.active) {
+      throw new BadRequestException({
+        code: LABOUR_WORKER_ERRORS.TRANSFER_SITE_INACTIVE,
+        message: `${site.name} is inactive. Labour can only be moved to an active site.`,
+      });
+    }
+    await this.supervisorSites.assertSiteAllowed(caller, dto.siteId);
+
+    const today = zonedDateOnly(new Date(), this.refs.timeZone);
+    const updated = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      async (tx) => {
+        // The worker's latest punch: an "in" from today or last night is a day still open.
+        const last = await tx.labourPunch.findFirst({
+          where: { workerId: id },
+          orderBy: { punchedAt: 'desc' },
+        });
+        const yesterday = new Date(parseDateOnly(today).getTime() - 86_400_000);
+        if (
+          last &&
+          last.type === LabourPunchType.in &&
+          last.punchDate >= yesterday
+        ) {
+          throw new ConflictException({
+            code: LABOUR_WORKER_ERRORS.TRANSFER_ON_SITE,
+            message: `${worker.fullName} is punched in and not yet out. Punch them out at the current site first.`,
+          });
+        }
+        await tx.gangMember.updateMany({
+          where: { workerId: id, isActive: true },
+          data: { isActive: false },
+        });
+        await tx.labourWorkerTransfer.create({
+          data: {
+            companyId: worker.companyId,
+            workerId: id,
+            fromSiteId: worker.siteId,
+            toSiteId: dto.siteId,
+            transferredOn: parseDateOnly(today),
+            reason: dto.reason?.trim() || null,
+            createdBy: caller.id,
+          },
+        });
+        return tx.labourWorker.update({
+          where: { id },
+          data: { siteId: dto.siteId },
+          include: { transfers: { orderBy: { createdAt: 'asc' } } },
+        });
+      },
+    );
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.LABOUR_WORKER,
+      action: AuditAction.UPDATE,
+      entityId: id,
+      accountId: caller.id,
+      companyId: worker.companyId,
+      ipAddress,
+      changes: {
+        fields: ['siteId'],
+        fromSiteId: worker.siteId,
+        toSiteId: dto.siteId,
+      },
+    });
+    return this.toDetail(caller, updated);
+  }
+
+  /** A worker the caller may change: in scope and at a site the caller is assigned to. */
+  private async loadForWrite(caller: AuthenticatedUser, id: string) {
+    const worker = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.labourWorker.findUnique({
+          where: { id },
+          include: { transfers: { orderBy: { createdAt: 'asc' } } },
+        }),
+    );
+    if (!worker || worker.deletedAt) {
+      throw new NotFoundException(`Worker ${id} not found`);
+    }
+    assertInScope(caller, worker, `Worker ${id}`);
+    await this.supervisorSites.assertSiteAllowed(caller, worker.siteId);
+    return worker;
+  }
+
+  /**
+   * A special daily rate overrides the site rate HR sets, so setting, changing or clearing one
+   * needs LABOUR_APPROVE — the permission site rates need (052). A site supervisor can register
+   * and correct labour, but not price them.
+   */
+  private assertMaySetRate(caller: AuthenticatedUser): void {
+    if (!caller.permissions.includes(Permission.LABOUR_APPROVE)) {
+      throw new ForbiddenException({
+        code: LABOUR_WORKER_ERRORS.RATE_NEEDS_APPROVE,
+        message:
+          'Only someone who can approve labour (who sets site rates) can set a special daily rate.',
+      });
+    }
   }
 
   /**

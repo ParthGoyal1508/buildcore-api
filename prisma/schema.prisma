@@ -8814,12 +8814,40 @@ model LabourWorker {
   deletedBy String?
 
   gangMemberships GangMember[]
+  /// 052: every move between sites, oldest first.
+  transfers       LabourWorkerTransfer[]
 
   @@unique([companyId, labourCode])
   @@index([companyId])
   @@index([companyId, siteId])
   @@index([companyId, skillCategoryId])
   @@index([companyId, status])
+  @@schema("labour")
+}
+
+/// 052: one move of a worker from one site to another. Attendance is recorded against the site it
+/// was punched at, so a transfer only changes where the worker punches from `transferredOn`; the
+/// days before stay on the old site's musters and payment sheets. Never updated or deleted.
+model LabourWorkerTransfer {
+  id        String @id @default(cuid())
+  companyId String
+
+  workerId String
+  worker   LabourWorker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  /// → projects.Site.
+  fromSiteId    String
+  /// → projects.Site.
+  toSiteId      String
+  /// Company-timezone day the move took effect: the first day that belongs to `toSiteId`.
+  transferredOn DateTime @db.Date
+  reason        String?
+
+  createdBy String
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@index([workerId, transferredOn])
   @@schema("labour")
 }
 
@@ -9037,6 +9065,11 @@ model PaymentSheetLine {
   acknowledgementRef    String?
   /// Unpaid remainder (short payment) carried to the next period (FR-030).
   carriedForwardBalance Decimal            @default(0) @db.Decimal(14, 2)
+
+  /// 052: the worker's contractor (→ partners vendor) when the line was priced, so editing the
+  /// worker later does not change who a generated sheet says engaged them. Null for a direct
+  /// worker, and on lines priced before 052 (read the worker's current contractor for those).
+  contractorId String?
 
   /// 036 O4: set on a carry-forward line — the earlier line whose short payment this line pays.
   /// Null on an ordinary wage line. Not a relation: the earlier line can sit on another sheet,

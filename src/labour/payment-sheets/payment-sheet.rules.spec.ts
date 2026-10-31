@@ -1,4 +1,7 @@
+import { EngagementType } from '@prisma/client';
+
 import {
+  lineContractorId,
   paidAmountProblem,
   periodEndProblem,
   planAdvanceDeductions,
@@ -107,5 +110,40 @@ describe('payment sheet rules (036)', () => {
     it('accepts a sheet ending yesterday', () => {
       expect(periodEndProblem('2026-10-16', '2026-10-17')).toBeNull();
     });
+  });
+});
+
+describe('lineContractorId (052)', () => {
+  const contractorSheet = { engagementType: EngagementType.contractor };
+  const directSheet = { engagementType: EngagementType.direct };
+
+  it("keeps the contractor the line was priced under, whatever the worker's now", () => {
+    expect(
+      lineContractorId(
+        contractorSheet,
+        { contractorId: 'v1' },
+        { contractorId: 'v2' },
+      ),
+    ).toBe('v1');
+  });
+
+  it("falls back to the worker's contractor on a line priced before 052", () => {
+    expect(
+      lineContractorId(
+        contractorSheet,
+        { contractorId: null },
+        { contractorId: 'v2' },
+      ),
+    ).toBe('v2');
+  });
+
+  it('has none on a direct sheet', () => {
+    expect(
+      lineContractorId(
+        directSheet,
+        { contractorId: null },
+        { contractorId: 'v2' },
+      ),
+    ).toBeNull();
   });
 });
