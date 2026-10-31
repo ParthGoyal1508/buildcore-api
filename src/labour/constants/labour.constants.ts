@@ -26,3 +26,32 @@ export const PII_VISIBLE_CHARS = 4;
 /** 036: the largest advance one request may ask for, and the most instalments it may run over. */
 export const MAX_ADVANCE_AMOUNT = 1_000_000;
 export const MAX_RECOVERY_INSTALMENTS = 104;
+
+/** 052: error codes for editing and transferring a worker. */
+export const LABOUR_WORKER_ERRORS = {
+  /** Setting, changing or clearing a special daily rate needs LABOUR_APPROVE, as site rates do. */
+  RATE_NEEDS_APPROVE: 'LABOUR_RATE_NEEDS_APPROVE',
+  CONTRACTOR_REQUIRED: 'LABOUR_CONTRACTOR_REQUIRED',
+  AADHAAR_EXISTS: 'LABOUR_AADHAAR_EXISTS',
+  TRANSFER_SAME_SITE: 'LABOUR_TRANSFER_SAME_SITE',
+  TRANSFER_SITE_NOT_FOUND: 'LABOUR_TRANSFER_SITE_NOT_FOUND',
+  TRANSFER_SITE_INACTIVE: 'LABOUR_TRANSFER_SITE_INACTIVE',
+  TRANSFER_WORKER_INACTIVE: 'LABOUR_TRANSFER_WORKER_INACTIVE',
+  /** Punched in and not yet out: the day must close at the site it started at. */
+  TRANSFER_ON_SITE: 'LABOUR_TRANSFER_ON_SITE',
+} as const;
+
+/** 052: the worker fields an edit may change, in the order the audit log lists them. */
+export const WORKER_EDITABLE_FIELDS = [
+  'fullName',
+  'gender',
+  'fatherName',
+  'phone',
+  'dateOfBirth',
+  'skillCategoryId',
+  'engagementType',
+  'contractorId',
+  'aadhaarNumber',
+  'bankAccount',
+  'rateOverride',
+] as const;

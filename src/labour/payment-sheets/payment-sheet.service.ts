@@ -42,6 +42,7 @@ import { ImageProcessingService } from '../../hr/biometrics/image-processing.ser
 import {
   type DeductionEntry,
   deductionEntries,
+  lineContractorId,
   paidAmountProblem,
   periodEndProblem,
   planAdvanceDeductions,
@@ -320,11 +321,30 @@ export class PaymentSheetService {
     });
     const workerById = new Map(workers.map((w) => [w.id, w]));
 
+    // 052: a worker whose engagement was edited can have days this site already priced on a sheet
+    // of the other engagement type; those days are left off, so no day is paid twice.
+    const pricedElsewhere = await this.daysOnOtherSheets(
+      tx,
+      sheet,
+      workers
+        .filter((w) => w.engagementType === engagementType)
+        .map((w) => w.id),
+    );
+
     // Group lines per worker, filtered to the requested engagement type.
     const perWorker = new Map<string, typeof musterLines>();
     for (const line of musterLines) {
       const worker = workerById.get(line.workerId);
       if (!worker || worker.engagementType !== engagementType) continue;
+      if (
+        pricedElsewhere
+          .get(line.workerId)
+          ?.some(
+            ([from, to]) => line.muster.date >= from && line.muster.date <= to,
+          )
+      ) {
+        continue;
+      }
       const list = perWorker.get(line.workerId) ?? [];
       list.push(line);
       perWorker.set(line.workerId, list);
@@ -412,6 +432,11 @@ export class PaymentSheetService {
           overtimeHours: wage.overtimeHours,
           resolvedRate: resolvedRateForLine,
           rateSource,
+          // 052: who engaged the worker when the line was priced — a later edit leaves it alone.
+          contractorId:
+            worker.engagementType === EngagementType.contractor
+              ? worker.contractorId
+              : null,
           grossWage: wage.grossWage,
           deductions: deductions as unknown as Prisma.InputJsonValue,
           netPayable,
@@ -437,6 +462,10 @@ export class PaymentSheetService {
             overtimeHours: 0,
             resolvedRate: 0,
             rateSource,
+            contractorId:
+              worker.engagementType === EngagementType.contractor
+                ? worker.contractorId
+                : null,
             grossWage: 0,
             deductions: [] as unknown as Prisma.InputJsonValue,
             netPayable: carry.amount,
@@ -457,6 +486,53 @@ export class PaymentSheetService {
         netTotal: roundMoney(netTotal),
       },
     });
+  }
+
+  /**
+   * 052: for each worker, the periods of this site's other live sheets — of the other engagement
+   * type — that already carry a wage line for them. Only an engagement edit puts a worker on both
+   * kinds of sheet; sheets of the same type cannot overlap at a site (FR-023).
+   */
+  private async daysOnOtherSheets(
+    tx: Prisma.TransactionClient,
+    sheet: SheetForLines,
+    workerIds: string[],
+  ): Promise<Map<string, [Date, Date][]>> {
+    const found = new Map<string, [Date, Date][]>();
+    if (workerIds.length === 0) return found;
+    const sheets = await tx.labourPaymentSheet.findMany({
+      where: {
+        companyId: sheet.companyId,
+        id: { not: sheet.id },
+        deletedAt: null,
+        engagementType: { not: sheet.engagementType },
+        periodFrom: { lte: sheet.periodTo },
+        periodTo: { gte: sheet.periodFrom },
+        OR: [
+          { siteId: sheet.siteId },
+          ...(sheet.projectId
+            ? [{ siteId: null, projectId: sheet.projectId }]
+            : []),
+        ],
+      },
+      select: {
+        periodFrom: true,
+        periodTo: true,
+        lines: {
+          where: { workerId: { in: workerIds }, carriedFromLineId: null },
+          select: { workerId: true },
+        },
+      },
+    });
+    for (const other of sheets) {
+      for (const { workerId } of other.lines) {
+        found.set(workerId, [
+          ...(found.get(workerId) ?? []),
+          [other.periodFrom, other.periodTo],
+        ]);
+      }
+    }
+    return found;
   }
 
   /**
@@ -658,10 +734,24 @@ export class PaymentSheetService {
       (tx) =>
         tx.labourWorker.findMany({
           where: { id: { in: [...new Set(row.lines.map((l) => l.workerId))] } },
-          select: { id: true, fullName: true, labourCode: true },
+          select: {
+            id: true,
+            fullName: true,
+            labourCode: true,
+            contractorId: true,
+          },
         }),
     );
     const workerById = new Map(workers.map((w) => [w.id, w]));
+    // 052: the contractor each line was priced under.
+    const lineContractor = (l: {
+      contractorId: string | null;
+      workerId: string;
+    }) => lineContractorId(row, l, workerById.get(l.workerId));
+    const contractorNames = await this.refs.contractorNames(
+      caller,
+      row.lines.map(lineContractor),
+    );
     const siteName = row.siteId
       ? (await this.refs.siteNames(caller, [row.siteId])).get(row.siteId) ??
         null
@@ -705,6 +795,8 @@ export class PaymentSheetService {
         workerId: l.workerId,
         workerName: workerById.get(l.workerId)?.fullName ?? null,
         labourCode: workerById.get(l.workerId)?.labourCode ?? null,
+        contractorId: lineContractor(l),
+        contractorName: contractorNames.get(lineContractor(l) ?? '') ?? null,
         daysWorked: l.daysWorked.toNumber(),
         overtimeHours: l.overtimeHours.toNumber(),
         resolvedRate: l.resolvedRate.toNumber(),

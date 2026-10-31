@@ -86,11 +86,13 @@ export class PartnersService {
   async listVendorsForCompany(
     ctx: RlsContext,
     companyId: string,
-  ): Promise<{ id: string; name: string; active: boolean }[]> {
+  ): Promise<
+    { id: string; name: string; active: boolean; type: VendorType }[]
+  > {
     return withRlsContext(this.prisma, ctx, (tx) =>
       tx.vendor.findMany({
         where: { companyId },
-        select: { id: true, name: true, active: true },
+        select: { id: true, name: true, active: true, type: true },
         orderBy: { name: 'asc' },
       }),
     );

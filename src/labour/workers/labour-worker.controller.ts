@@ -18,10 +18,13 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import {
+  ContractorOptionsDto,
   CreateWorkerDto,
   DeactivateWorkerDto,
   EnrolWorkerFaceDto,
   ListWorkersDto,
+  TransferWorkerDto,
+  UpdateWorkerDto,
 } from './dto/worker.dto';
 import { LabourWorkerService } from './labour-worker.service';
 
@@ -42,8 +45,23 @@ export class LabourWorkerController {
     return this.workers.findAll(caller, query);
   }
 
+  // Declared before `:id`, which would otherwise take the path segment as a worker id.
+  @Get('contractor-options')
+  @ApiOperation({
+    summary: 'Active vendors a worker can be engaged through (052)',
+    description: 'Labour contractors first, then other vendors, by name.',
+  })
+  async contractorOptions(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query() query: ContractorOptionsDto,
+  ) {
+    return this.workers.contractorOptions(caller, query.companyId);
+  }
+
   @Get(':id')
-  @ApiOperation({ summary: 'One worker with masked PII' })
+  @ApiOperation({
+    summary: 'One worker with masked PII, special rate and site history',
+  })
   async findOne(
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
@@ -64,6 +82,40 @@ export class LabourWorkerController {
     @Ip() ip: string,
   ) {
     return this.workers.create(caller, dto, ip);
+  }
+
+  @Patch(':id')
+  @ApiOperation({
+    summary: "Edit a worker's registration details (052)",
+    description:
+      'Omitted fields are unchanged; null clears an optional field. The labour code, site and face ' +
+      'stay. Same rules as registration: contractor required and active for a contractor worker, ' +
+      'duplicate active Aadhaar → 409. Changing the special rate needs LABOUR_APPROVE. Payment ' +
+      'sheet lines already generated keep their figures.',
+  })
+  async update(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateWorkerDto,
+    @Ip() ip: string,
+  ) {
+    return this.workers.update(caller, id, dto, ip);
+  }
+
+  @Post(':id/transfer')
+  @ApiOperation({
+    summary: 'Move a worker to another site (052)',
+    description:
+      'From today the worker punches at the new site; recorded days stay with the old site. ' +
+      'Refused for an inactive worker or site, a site of another company, or while punched in.',
+  })
+  async transfer(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: TransferWorkerDto,
+    @Ip() ip: string,
+  ) {
+    return this.workers.transfer(caller, id, dto, ip);
   }
 
   @Patch(':id/deactivate')

@@ -18,7 +18,10 @@ import {
   type MusterWorkerRef,
 } from '../attendance/muster-attendance.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
-import { deductionEntries } from '../payment-sheets/payment-sheet.rules';
+import {
+  deductionEntries,
+  lineContractorId,
+} from '../payment-sheets/payment-sheet.rules';
 import { CashPolicyService } from '../../common/cash/cash-policy';
 import {
   cashCarrySources,
@@ -275,6 +278,13 @@ export class LabourSheetsService {
         }),
     );
     const byId = new Map(workers.map((w) => [w.id, w]));
+    // 052: the contractor each line was priced under, beside the name — blank for direct labour.
+    const contractorOf = (l: (typeof sheet.lines)[number]) =>
+      lineContractorId(sheet, l, byId.get(l.workerId));
+    const contractorNames = await this.refs.contractorNames(
+      caller,
+      sheet.lines.map(contractorOf),
+    );
     const sites = await this.supervisorSites.mySites(caller);
     const site = sites.find((s) => s.id === sheet.siteId)?.name ?? '';
 
@@ -310,6 +320,7 @@ export class LabourSheetsService {
       'Name',
       "Father's name",
       'Gender',
+      'Contractor',
       'Days',
       'Daily rate',
       'Gross',
@@ -340,6 +351,7 @@ export class LabourSheetsService {
         l.carriedFromLineId ? `${name} (balance carried forward)` : name,
         w?.fatherName ?? '',
         w?.gender ? capitalise(w.gender) : '',
+        contractorNames.get(contractorOf(l) ?? '') ?? '',
         l.daysWorked.toNumber(),
         l.resolvedRate.toNumber(),
         l.grossWage.toNumber(),
@@ -355,6 +367,7 @@ export class LabourSheetsService {
       'Total',
       '',
       '',
+      '',
       lines.reduce((s, l) => s + l.daysWorked.toNumber(), 0),
       '',
       sheet.grossTotal.toNumber(),
@@ -364,9 +377,9 @@ export class LabourSheetsService {
     ]);
     totals.font = { bold: true };
 
-    const widths = [6, 11, 24, 22, 8, 7, 11, 12, 12, 13, 22];
+    const widths = [6, 11, 24, 22, 8, 24, 7, 11, 12, 12, 13, 22];
     widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
-    for (const col of [7, 8, 9, 10]) ws.getColumn(col).numFmt = '#,##0.00';
+    for (const col of [8, 9, 10, 11]) ws.getColumn(col).numFmt = '#,##0.00';
     ws.eachRow((row, n) => {
       if (n < 4) return;
       row.eachCell({ includeEmpty: true }, (c) => {
