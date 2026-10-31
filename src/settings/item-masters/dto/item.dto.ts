@@ -28,7 +28,10 @@ export class CreateItemDto {
   @MaxLength(100)
   categoryId!: string;
 
-  @ApiProperty({ enum: ItemUnit, description: 'The eight units of FR-018' })
+  @ApiProperty({
+    enum: ItemUnit,
+    description: 'The units of FR-018, with KL (kilolitre) since 051',
+  })
   @IsEnum(ItemUnit)
   unit!: ItemUnit;
 
