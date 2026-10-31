@@ -1,3 +1,5 @@
+import { EngagementType } from '@prisma/client';
+
 import { roundMoney } from './wage-calc.util';
 
 /**
@@ -127,4 +129,20 @@ export function periodEndProblem(
     return `A payment sheet can only cover days that have ended. Choose a last day before ${today}.`;
   }
   return null;
+}
+
+/**
+ * 052: the contractor a payment sheet line was priced under. Lines priced since 052 carry it; a
+ * line priced before has none of its own, so on a contractor sheet the worker's current contractor
+ * stands in for it. A direct sheet has no contractor.
+ */
+export function lineContractorId(
+  sheet: { engagementType: EngagementType },
+  line: { contractorId: string | null },
+  worker: { contractorId: string | null } | undefined,
+): string | null {
+  if (line.contractorId) return line.contractorId;
+  return sheet.engagementType === EngagementType.contractor
+    ? worker?.contractorId ?? null
+    : null;
 }

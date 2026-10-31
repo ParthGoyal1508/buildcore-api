@@ -5176,6 +5176,7 @@ resolved via PartnersService (FR-034).']
   deletedAt DateTime
   deletedBy String
   gangMemberships GangMember [not null]
+  transfers LabourWorkerTransfer [not null, note: '052: every move between sites, oldest first.']
 
   indexes {
     (companyId, labourCode) [unique]
@@ -5185,6 +5186,23 @@ resolved via PartnersService (FR-034).']
 contractor-engaged (paid through a contractor from 007\'s vault). Supersedes 005\'s
 Daily Worker. PII (`aadhaarNumber`, `bankAccount`) is masked in list responses
 (FR-009) and unique among active workers for Aadhaar (FR-010).'
+}
+
+Table LabourWorkerTransfer {
+  id String [pk]
+  companyId String [not null]
+  workerId String [not null]
+  worker LabourWorker [not null]
+  fromSiteId String [not null, note: '→ projects.Site.']
+  toSiteId String [not null, note: '→ projects.Site.']
+  transferredOn DateTime [not null, note: 'Company-timezone day the move took effect: the first day that belongs to `toSiteId`.']
+  reason String
+  createdBy String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: '052: one move of a worker from one site to another. Attendance is recorded against the site it
+was punched at, so a transfer only changes where the worker punches from `transferredOn`; the
+days before stay on the old site\'s musters and payment sheets. Never updated or deleted.'
 }
 
 Table LabourGang {
@@ -5336,6 +5354,9 @@ Table PaymentSheetLine {
   shortPaymentReason String
   acknowledgementRef String [note: 'Encrypted object-storage ref, required for a cash disbursement (FR-029).']
   carriedForwardBalance Decimal [not null, default: 0, note: 'Unpaid remainder (short payment) carried to the next period (FR-030).']
+  contractorId String [note: '052: the worker\'s contractor (→ partners vendor) when the line was priced, so editing the
+worker later does not change who a generated sheet says engaged them. Null for a direct
+worker, and on lines priced before 052 (read the worker\'s current contractor for those).']
   carriedFromLineId String [note: '036 O4: set on a carry-forward line — the earlier line whose short payment this line pays.
 Null on an ordinary wage line. Not a relation: the earlier line can sit on another sheet,
 and a sheet\'s lines go with it.']
@@ -7682,6 +7703,8 @@ Ref: SparePartMovement.maintenanceJobId > MaintenanceJob.id
 Ref: SparePartMovement.reversalOfId - SparePartMovement.id
 
 Ref: ServiceBill.maintenanceJobId > MaintenanceJob.id [delete: Cascade]
+
+Ref: LabourWorkerTransfer.workerId > LabourWorker.id [delete: Cascade]
 
 Ref: GangMember.gangId > LabourGang.id [delete: Cascade]
 

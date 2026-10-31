@@ -154,6 +154,7 @@ function sheetService(
   };
   const refs = {
     siteNames: async () => new Map(),
+    contractorNames: async () => new Map(),
     getLabourSettings: async () => ({ cashDenominations: [500, 100] }),
   };
   const sites = {

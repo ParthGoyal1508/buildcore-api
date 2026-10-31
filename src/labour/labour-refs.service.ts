@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SiteStatus, VendorType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
@@ -86,6 +87,56 @@ export class LabourRefsService {
     return site.companyId;
   }
 
+  /** 052: a site's company, name and status — or null when it does not exist or is out of scope. */
+  async findSite(
+    caller: AuthenticatedUser,
+    siteId: string,
+  ): Promise<{
+    id: string;
+    companyId: string;
+    name: string;
+    status: SiteStatus;
+  } | null> {
+    const site = await this.sites
+      .getSiteById(rlsContextFor(caller), siteId)
+      .catch(() => null);
+    return site
+      ? {
+          id: site.id,
+          companyId: site.companyId,
+          name: site.name,
+          status: site.status,
+        }
+      : null;
+  }
+
+  /**
+   * 052: the company's active vendors, for the contractor picker — labour contractors first, then
+   * everyone else, by name. Registration accepts any active vendor of the company (FR-008), so the
+   * picker offers them all rather than guessing from the vendor's type.
+   */
+  async contractorOptions(
+    caller: AuthenticatedUser,
+    companyId: string,
+  ): Promise<{ id: string; name: string; type: VendorType }[]> {
+    const vendors = await this.partners.listVendorsForCompany(
+      rlsContextFor(caller),
+      companyId,
+    );
+    const rank = (t: VendorType) =>
+      t === VendorType.labour_contractor
+        ? 0
+        : t === VendorType.subcontractor
+        ? 1
+        : 2;
+    return vendors
+      .filter((v) => v.active)
+      .sort(
+        (a, b) => rank(a.type) - rank(b.type) || a.name.localeCompare(b.name),
+      )
+      .map(({ id, name, type }) => ({ id, name, type }));
+  }
+
   /** The project a site belongs to (or null), resolved via `projects` — used to
    * price a muster line against the project's wage rate. */
   async getSiteProjectId(
@@ -99,7 +150,7 @@ export class LabourRefsService {
   /**
    * Validates that a contractor reference resolves to an active partner (FR-008,
    * FR-034). Raises 400 rather than returning a flag: it is only ever called while
-   * creating a worker, where an unresolved contractor is a bad request.
+   * creating or editing a worker, where an unresolved contractor is a bad request.
    */
   async assertActiveContractor(
     caller: AuthenticatedUser,
