@@ -17,6 +17,9 @@ const UPLOAD_ROUTES = [
   'PATCH /recruitment/onboarding/items/:id/verify',
   'POST /assets/:id/documents',
   'POST /company-documents',
+  // 054: face unlock — one frame to confirm, 3–5 to register.
+  'POST /auth/face-unlock/confirm',
+  'PUT /auth/face-unlock',
   'POST /hr/attendance/import/commit',
   'POST /hr/attendance/import/validate',
   'POST /hr/employees/:employeeId/documents',

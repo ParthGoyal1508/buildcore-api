@@ -19,10 +19,29 @@ describe('activity log descriptions', () => {
           purpose: 'cash-visibility',
         }),
       ),
-    ).toBe('Confirmed their password for Personal Settings');
+    ).toBe('Confirmed their password for App Settings');
   });
 
-  it('says which way the cash switch went, for rows from before the event was named too', () => {
+  it('names face unlock events for what they confirmed', () => {
+    const face = (event: string) =>
+      describeEvent(
+        row(AuditEntityType.USER_ACCOUNT, AuditAction.READ, {
+          event,
+          purpose: 'cash-visibility',
+        }),
+      );
+    expect(face('face_confirmed')).toBe(
+      'Confirmed their face for App Settings',
+    );
+    expect(face('face_confirmation_failed')).toBe(
+      'Face not recognised for App Settings',
+    );
+    expect(face('face_unlock_enrolled')).toBe(
+      'Set up face unlock for App Settings',
+    );
+  });
+
+  it('names the cash switch only as an app settings change, for rows from before the event was named too', () => {
     expect(
       describeEvent(
         row(AuditEntityType.COMPANY, AuditAction.UPDATE, {
@@ -31,7 +50,7 @@ describe('activity log descriptions', () => {
           confirmedByPassword: true,
         }),
       ),
-    ).toBe('Hid cash transactions');
+    ).toBe('Updated app settings');
     expect(
       describeEvent(
         row(AuditEntityType.COMPANY, AuditAction.UPDATE, {
@@ -39,7 +58,7 @@ describe('activity log descriptions', () => {
           confirmedByPassword: true,
         }),
       ),
-    ).toBe('Showed cash transactions');
+    ).toBe('Updated app settings');
   });
 
   it('leaves an ordinary update to "Updated"', () => {

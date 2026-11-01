@@ -90,6 +90,23 @@ model User {
   approvalsDelegated ApprovalInstance[] @relation("ApprovalDelegate")
   approvalDecisions  ApprovalDecision[] @relation("ApprovalActor")
 
+  faceUnlock UserFaceUnlock?
+
+  @@schema("shared")
+}
+
+/// A signed-in account's own face, used in place of re-entering the password before a sensitive
+/// act (054, 2026-11-01 — App Settings). Separate from `hr.FaceEnrolment`, which belongs to an
+/// employee: a Super Admin usually has no employee record. Only the derived descriptor is kept —
+/// no photos — and a re-registration overwrites it.
+model UserFaceUnlock {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The 128-float SFace descriptor, as `BiometricsService.serializeDescriptor` writes it.
+  descriptor Bytes
+  enrolledAt DateTime @default(now())
+
   @@schema("shared")
 }
 

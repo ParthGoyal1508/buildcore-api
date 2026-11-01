@@ -11,6 +11,7 @@ import {
   AccessLevel,
   AuditAction,
   AuditEntityType,
+  ClientBillStatus,
   CodeSeriesType,
   Permission,
   Prisma,
@@ -31,6 +32,7 @@ import { CodeSeriesService } from '../../settings/code-series/code-series.servic
 import { holdsAtLevel } from '../../common/access-levels';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { BillPaymentsService } from '../billing/payments/bill-payments.service';
+import { billValueOf } from '../billing/client-receipts.service';
 import {
   ProjectDocumentReadiness,
   ProjectDocumentsService,
@@ -55,6 +57,23 @@ export interface ProjectContractValue {
   projectId: string;
   name: string;
   contractValue: number;
+}
+
+/**
+ * The company's money position across projects, for the dashboard (054, 2026-11-01). Rupees.
+ *
+ * - `ongoingContractValue` / `completedContractValue`: contract value of projects in that status.
+ * - `billed`: every client bill past draft, at what it is worth to settle (`billValueOf`, as the
+ *   bill's receipts screen reads it).
+ * - `received`: money the client paid against those bills — receipt amounts, before deductions.
+ * - `outstanding`: per bill, what is billed and not yet settled (paid or deducted), never below 0.
+ */
+export interface ProjectMoneyPosition {
+  ongoingContractValue: number;
+  completedContractValue: number;
+  billed: number;
+  received: number;
+  outstanding: number;
 }
 
 export interface ProjectListItem {
@@ -1011,6 +1030,98 @@ export class ProjectsService {
       name: row.name,
       contractValue: Number(row.contractValue),
     }));
+  }
+
+  async getMoneyPosition(companyId: string): Promise<ProjectMoneyPosition> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      async (tx) => {
+        const [byStatus, bills, receipts] = await Promise.all([
+          tx.project.groupBy({
+            by: ['status'],
+            where: {
+              companyId,
+              status: { in: [ProjectStatus.ongoing, ProjectStatus.completed] },
+            },
+            _sum: { contractValue: true },
+          }),
+          tx.clientBill.findMany({
+            where: { companyId, status: { not: ClientBillStatus.draft } },
+            select: {
+              id: true,
+              grossAmount: true,
+              certifiedAmount: true,
+              package: {
+                select: {
+                  status: true,
+                  workDone: true,
+                  cgstAmount: true,
+                  sgstAmount: true,
+                  igstAmount: true,
+                },
+              },
+            },
+          }),
+          tx.clientBillReceipt.groupBy({
+            by: ['clientBillId'],
+            where: {
+              companyId,
+              clientBill: { status: { not: ClientBillStatus.draft } },
+            },
+            _sum: {
+              amount: true,
+              retentionAmount: true,
+              cpbgAmount: true,
+              tdsAmount: true,
+              otherDeduction: true,
+            },
+          }),
+        ]);
+
+        const contract = (status: ProjectStatus) =>
+          Number(
+            byStatus.find((row) => row.status === status)?._sum.contractValue ??
+              0,
+          );
+        const zero = new Prisma.Decimal(0);
+        const settledBy = new Map(
+          receipts.map((r) => [
+            r.clientBillId,
+            {
+              received: r._sum.amount ?? zero,
+              settled: [
+                r._sum.amount,
+                r._sum.retentionAmount,
+                r._sum.cpbgAmount,
+                r._sum.tdsAmount,
+                r._sum.otherDeduction,
+              ].reduce<Prisma.Decimal>((sum, v) => sum.plus(v ?? 0), zero),
+            },
+          ]),
+        );
+
+        let billed = zero;
+        let received = zero;
+        let outstanding = zero;
+        for (const bill of bills) {
+          const { billValue } = billValueOf(bill);
+          const paid = settledBy.get(bill.id);
+          billed = billed.plus(billValue);
+          received = received.plus(paid?.received ?? zero);
+          const left = billValue.minus(paid?.settled ?? zero);
+          if (left.isPositive()) outstanding = outstanding.plus(left);
+        }
+
+        return {
+          ongoingContractValue: contract(ProjectStatus.ongoing),
+          completedContractValue: contract(ProjectStatus.completed),
+          billed: billed.toNumber(),
+          received: received.toNumber(),
+          outstanding: outstanding.toNumber(),
+        };
+      },
+    );
   }
 
   /**

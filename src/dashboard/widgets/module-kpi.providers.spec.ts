@@ -4,11 +4,15 @@ import { buildDashboardContext } from '../context';
 import {
   ActiveProjectsWidget,
   AlertsRemindersWidget,
+  BilledAmountWidget,
+  CompletedContractValueWidget,
   ContractValueWidget,
   MachineryAtSiteWidget,
   MachineryDeployedWidget,
   MaterialStockValueWidget,
   MaterialStockWidget,
+  ReceivableAmountWidget,
+  ReceivedAmountWidget,
   SiteFuelConsumedWidget,
   SiteFuelConsumptionWidget,
   TotalMachineryWidget,
@@ -98,20 +102,37 @@ describe('dashboard cards for modules that now exist', () => {
     });
   });
 
-  describe('Contract Value', () => {
-    it('sums the portfolio and declares itself money', async () => {
+  describe('project money cards (054)', () => {
+    const position = {
+      ongoingContractValue: 185_000_000,
+      completedContractValue: 42_000_000,
+      billed: 90_000_000,
+      received: 70_000_000,
+      outstanding: 15_000_000,
+    };
+
+    it('shows each figure as money, from one read of the position', async () => {
       const projects = {
         isPortfolioAvailable: () => true,
-        getProjectsWithContractValues: async () => [
-          { projectId: 'p1', name: 'A', contractValue: 185_000_000 },
-          { projectId: 'p2', name: 'B', contractValue: 186_100_000 },
-        ],
+        getMoneyPosition: jest.fn(async () => position),
       };
-      const result = await rendered(new ContractValueWidget(projects as any));
-      expect(result.value).toBe(371_100_000);
-      // Without this the card renders `371100000`, which is ₹37.11 crore written so
-      // that it reads as easily as ₹3.7 crore. The unit is what makes it legible.
-      expect(result.valueUnit).toBe('currency');
+      const context = ctx();
+      const cards = [
+        [new ContractValueWidget(projects as any), 185_000_000],
+        [new CompletedContractValueWidget(projects as any), 42_000_000],
+        [new BilledAmountWidget(projects as any), 90_000_000],
+        [new ReceivedAmountWidget(projects as any), 70_000_000],
+        [new ReceivableAmountWidget(projects as any), 15_000_000],
+      ] as const;
+      for (const [widget, expected] of cards) {
+        const result = await resolveWidget(widget, context);
+        if ('unavailable' in result)
+          throw new Error(`${widget.id} unavailable`);
+        expect(result.value).toBe(expected);
+        // Without the unit the card renders `185000000`, unreadable as rupees.
+        expect(result.valueUnit).toBe('currency');
+      }
+      expect(projects.getMoneyPosition).toHaveBeenCalledTimes(1);
     });
   });
 
