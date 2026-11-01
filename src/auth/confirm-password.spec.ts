@@ -33,20 +33,25 @@ function caller(overrides: Partial<AuthenticatedUser> = {}): AuthenticatedUser {
   } as unknown as AuthenticatedUser;
 }
 
-function build(passwordValid: boolean) {
+function build(passwordValid: boolean, secretSet = true) {
   const userUpdate = jest.fn().mockResolvedValue({});
+  const findSecret = jest
+    .fn()
+    .mockResolvedValue(
+      secretSet ? { purpose: 'cash-visibility', hash: 'settings-hash' } : null,
+    );
   const tx = {
     $executeRaw: jest.fn().mockResolvedValue(0),
     $executeRawUnsafe: jest.fn().mockResolvedValue(0),
     $queryRaw: jest.fn().mockResolvedValue([]),
     user: { update: userUpdate },
+    confirmationSecret: { findUnique: findSecret },
   };
   const prisma = {
     $transaction: (fn: (t: typeof tx) => unknown) => fn(tx),
   } as never;
-  const passwordService = {
-    validatePassword: jest.fn().mockResolvedValue(passwordValid),
-  } as never;
+  const validatePassword = jest.fn().mockResolvedValue(passwordValid);
+  const passwordService = { validatePassword } as never;
   const configService = { get: () => securityConfig } as never;
   const auditLog = {
     record: jest.fn().mockResolvedValue(undefined),
@@ -66,7 +71,7 @@ function build(passwordValid: boolean) {
     confirmation,
     {} as never,
   );
-  return { service, auditLog, userUpdate, confirmation };
+  return { service, auditLog, userUpdate, confirmation, validatePassword };
 }
 
 async function refusal(promise: Promise<unknown>) {
@@ -101,6 +106,32 @@ describe('AuthService.confirmPassword', () => {
         changes: { event: 'password_confirmed', purpose: 'cash-visibility' },
       }),
     );
+  });
+
+  it("checks the settings password, not the caller's sign-in password", async () => {
+    const { service, validatePassword } = build(true);
+    await service.confirmPassword(
+      caller(),
+      'settings-pass',
+      'cash-visibility',
+      '10.0.0.1',
+    );
+    expect(validatePassword).toHaveBeenCalledWith(
+      'settings-pass',
+      'settings-hash',
+    );
+  });
+
+  it('refuses as not available while no settings password has been generated', async () => {
+    const { service, validatePassword } = build(true, false);
+    const err = await refusal(
+      service.confirmPassword(caller(), 'x', 'cash-visibility', '10.0.0.1'),
+    );
+    expect(err.getStatus()).toBe(403);
+    expect((err.getResponse() as { code: string }).code).toBe(
+      'CONFIRMATION_NOT_SET_UP',
+    );
+    expect(validatePassword).not.toHaveBeenCalled();
   });
 
   it('refuses a wrong password with a coded 403, counts it toward lockout, and audits it', async () => {

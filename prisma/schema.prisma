@@ -110,6 +110,20 @@ model UserFaceUnlock {
   @@schema("shared")
 }
 
+/// The password a confirmation purpose checks instead of the caller's own (054, 2026-11-01).
+///
+/// App Settings is confirmed with a password of its own, not the Super Admin's sign-in password.
+/// It is generated and rotated only by `prisma/rotate-settings-password.ts`: there is no route
+/// that sets it, so nothing in the interface can show or change it. Only the argon2 hash is kept.
+model ConfirmationSecret {
+  /// A `CONFIRMATION_PURPOSES` key, e.g. `cash-visibility`.
+  purpose   String   @id
+  hash      String
+  rotatedAt DateTime @default(now())
+
+  @@schema("shared")
+}
+
 enum CredentialOrigin {
   /// Chosen by the account holder, via an invite token. The default, and what every
   /// account created before feature 010's 2026-09-01 amendment is.

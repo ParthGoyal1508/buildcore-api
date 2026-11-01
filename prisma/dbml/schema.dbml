@@ -62,6 +62,18 @@ employee: a Super Admin usually has no employee record. Only the derived descrip
 no photos — and a re-registration overwrites it.'
 }
 
+Table ConfirmationSecret {
+  purpose String [pk, note: 'A `CONFIRMATION_PURPOSES` key, e.g. `cash-visibility`.']
+  hash String [not null]
+  rotatedAt DateTime [default: `now()`, not null]
+
+  Note: 'The password a confirmation purpose checks instead of the caller\'s own (054, 2026-11-01).
+
+App Settings is confirmed with a password of its own, not the Super Admin\'s sign-in password.
+It is generated and rotated only by `prisma/rotate-settings-password.ts`: there is no route
+that sets it, so nothing in the interface can show or change it. Only the argon2 hash is kept.'
+}
+
 Table Role {
   id String [pk]
   name String [not null, note: 'Unique among the global roles, and within each company\'s own (036 C10) — two partial unique

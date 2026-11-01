@@ -340,9 +340,10 @@ export class AuthService {
   }
 
   /**
-   * Re-checks the signed-in caller's own password before a sensitive act and returns a
-   * short-lived confirmation for it (2026-10-14 — "To reveal it, the Super Admin must enter
-   * their own password in Settings").
+   * Checks the purpose's password before a sensitive act and returns a short-lived confirmation
+   * for it (2026-10-14; since 054 the password is the purpose's own — `ConfirmationSecret`, set
+   * by `prisma/rotate-settings-password.ts` — not the caller's sign-in password, and a purpose
+   * with none set is refused as not available).
    *
    * **The same brute-force rules as sign-in.** A session left open on a shared machine is
    * exactly the attacker this exists to stop, so a wrong password here counts toward the same
@@ -382,9 +383,23 @@ export class AuthService {
       );
     }
 
+    // Checked against the purpose's own password, never the caller's sign-in one (054): the
+    // client wanted App Settings behind a password only the backend sets and hands out.
+    const secret = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) => tx.confirmationSecret.findUnique({ where: { purpose } }),
+    );
+    if (!secret) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'CONFIRMATION_NOT_SET_UP',
+        message: 'This setting is not available yet.',
+      });
+    }
     const valid = await this.passwordService.validatePassword(
       password,
-      caller.password,
+      secret.hash,
     );
     if (!valid) {
       const { maxAttempts, durationMinutes } =
