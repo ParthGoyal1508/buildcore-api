@@ -46,6 +46,20 @@ metadata.']
   approvalsRaised ApprovalInstance [not null]
   approvalsDelegated ApprovalInstance [not null]
   approvalDecisions ApprovalDecision [not null]
+  faceUnlock UserFaceUnlock
+}
+
+Table UserFaceUnlock {
+  id String [pk]
+  userId String [unique, not null]
+  user User [not null]
+  descriptor Bytes [not null, note: 'The 128-float SFace descriptor, as `BiometricsService.serializeDescriptor` writes it.']
+  enrolledAt DateTime [default: `now()`, not null]
+
+  Note: 'A signed-in account\'s own face, used in place of re-entering the password before a sensitive
+act (054, 2026-11-01 — App Settings). Separate from `hr.FaceEnrolment`, which belongs to an
+employee: a Super Admin usually has no employee record. Only the derived descriptor is kept —
+no photos — and a re-registration overwrites it.'
 }
 
 Table Role {
@@ -7377,6 +7391,8 @@ Enum BankGuaranteeStatus {
   RELEASED
   ENCASHED
 }
+
+Ref: UserFaceUnlock.userId - User.id [delete: Cascade]
 
 Ref: Role.companyId > Company.id [delete: Cascade]
 

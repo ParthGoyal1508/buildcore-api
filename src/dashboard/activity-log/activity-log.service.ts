@@ -22,6 +22,7 @@ import {
 } from './module-bucket-mapping';
 import {
   describeEvent,
+  isCashSwitch,
   targetLabelOf,
   targetLabelsFor,
 } from './activity-descriptions';
@@ -141,7 +142,9 @@ export class ActivityLogService {
       targetLabelsFor(this.prisma, rows),
     ]);
     return rows.map((row) => {
-      const { before, after } = this.beforeAfter(row.changes);
+      const { before, after } = isCashSwitch(row)
+        ? { before: '', after: '' }
+        : this.beforeAfter(row.changes);
       return {
         timestamp: row.createdAt.toISOString(),
         user: this.actorOf(row, names),
