@@ -80,9 +80,10 @@ export function cashHiddenError(): ForbiddenException {
   return new ForbiddenException({
     statusCode: 403,
     code: CASH_HIDDEN_CODE,
+    // Says nothing about why (2026-11-01): the switch is disguised in App Settings, and this
+    // message only reaches a form that offered a mode the company no longer takes.
     message:
-      'Cash transactions are turned off for this company. A Super Admin can turn them back on ' +
-      'in Settings → Personal settings → Cash transaction visibility.',
+      'This payment mode is not available. Refresh the page and choose another.',
   });
 }
 

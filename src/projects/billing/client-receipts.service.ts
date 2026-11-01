@@ -429,24 +429,8 @@ export class ClientReceiptsService {
     ]);
     const receipts = rows.map(viewOf);
 
-    // The package is the invoice the client was actually sent, GST included, once it is past
-    // approval. Without one, what the client certified, and failing that what we billed.
+    const { packageLive, basis, billValue } = billValueOf(bill);
     const pkg = bill.package;
-    const packageLive =
-      pkg !== null &&
-      pkg.status !== BillPackageStatus.draft &&
-      pkg.status !== BillPackageStatus.abandoned;
-    const basis: ClientBillReceipts['billValueBasis'] = packageLive
-      ? 'package'
-      : bill.certifiedAmount !== null
-      ? 'certified'
-      : 'billed';
-    const billValue = packageLive
-      ? pkg.workDone
-          .plus(pkg.cgstAmount)
-          .plus(pkg.sgstAmount)
-          .plus(pkg.igstAmount)
-      : bill.certifiedAmount ?? bill.grossAmount;
 
     const settled = rows.reduce(
       (sum, r) =>
@@ -465,13 +449,14 @@ export class ClientReceiptsService {
     const withheldCpbg = rows.reduce((s, r) => s.plus(r.cpbgAmount), ZERO);
 
     const gross = bill.certifiedAmount ?? bill.grossAmount;
-    const retentionDue = packageLive
-      ? pkg.retentionAmount
-      : !bill.retentionAmount.isZero()
-      ? bill.retentionAmount
-      : gross.times(bill.project.clientRetentionFraction ?? 0);
+    const retentionDue =
+      packageLive && pkg
+        ? pkg.retentionAmount
+        : !bill.retentionAmount.isZero()
+        ? bill.retentionAmount
+        : gross.times(bill.project.clientRetentionFraction ?? 0);
     const cpbgDue =
-      packageLive && !pkg.performanceSecurity.isZero()
+      packageLive && pkg && !pkg.performanceSecurity.isZero()
         ? pkg.performanceSecurity
         : gross.times(bill.project.clientCpbgFraction ?? 0);
     const pbgRunning = pbgs.length > 0;
@@ -559,6 +544,53 @@ export class ClientReceiptsService {
       orderBy: { expiryDate: 'asc' },
     });
   }
+}
+
+/** The parts of a bill its value is read from. */
+export interface BillValueSource {
+  grossAmount: Prisma.Decimal;
+  certifiedAmount: Prisma.Decimal | null;
+  package: {
+    status: BillPackageStatus;
+    workDone: Prisma.Decimal;
+    cgstAmount: Prisma.Decimal;
+    sgstAmount: Prisma.Decimal;
+    igstAmount: Prisma.Decimal;
+  } | null;
+}
+
+/**
+ * What a bill is worth to settle (048). The package is the invoice the client was actually sent,
+ * GST included, once it is past approval. Without one, what the client certified, and failing that
+ * what we billed. Exported so the dashboard's Billed figure (054) reads bills the same way.
+ */
+export function billValueOf(bill: BillValueSource): {
+  packageLive: boolean;
+  basis: ClientBillReceipts['billValueBasis'];
+  billValue: Prisma.Decimal;
+} {
+  const pkg = bill.package;
+  if (
+    pkg !== null &&
+    pkg.status !== BillPackageStatus.draft &&
+    pkg.status !== BillPackageStatus.abandoned
+  ) {
+    return {
+      packageLive: true,
+      basis: 'package',
+      billValue: pkg.workDone
+        .plus(pkg.cgstAmount)
+        .plus(pkg.sgstAmount)
+        .plus(pkg.igstAmount),
+    };
+  }
+  return bill.certifiedAmount !== null
+    ? {
+        packageLive: false,
+        basis: 'certified',
+        billValue: bill.certifiedAmount,
+      }
+    : { packageLive: false, basis: 'billed', billValue: bill.grossAmount };
 }
 
 const BASIS_WORDS: Record<ClientBillReceipts['billValueBasis'], string> = {

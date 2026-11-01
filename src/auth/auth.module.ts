@@ -12,11 +12,16 @@ import { RefreshTokenCleanupCron } from './refresh-token-cleanup.cron';
 import { AuditLogService } from './audit-log.service';
 import { PasswordConfirmationService } from './password-confirmation.service';
 import { PasswordResetService } from './password-reset.service';
+import { FaceUnlockController } from './face-unlock.controller';
+import { FaceUnlockService } from './face-unlock.service';
+import { BiometricsModule } from '../hr/biometrics/biometrics.module';
+import { ImageProcessingService } from '../hr/biometrics/image-processing.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { SecurityConfig } from '../common/configs/config.interface';
 
 @Module({
   imports: [
+    BiometricsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       useFactory: async (configService: ConfigService) => {
@@ -31,7 +36,7 @@ import { SecurityConfig } from '../common/configs/config.interface';
       inject: [ConfigService],
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, FaceUnlockController],
   providers: [
     AuthService,
     JwtStrategy,
@@ -43,6 +48,8 @@ import { SecurityConfig } from '../common/configs/config.interface';
     AuditLogService,
     PasswordConfirmationService,
     PasswordResetService,
+    FaceUnlockService,
+    ImageProcessingService,
   ],
   exports: [JwtAuthGuard, PermissionsGuard, PasswordConfirmationService],
 })

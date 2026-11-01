@@ -41,9 +41,14 @@ export const CONFIRMATION_TTL_SECONDS = 10 * 60;
 /** The refusal code for a missing, expired, foreign or mis-purposed token. */
 export const CONFIRMATION_REQUIRED = 'PASSWORD_CONFIRMATION_REQUIRED';
 
+/** How the caller proved it was them (054): their password, or their registered face. */
+export type ConfirmationMethod = 'password' | 'face';
+
 interface ConfirmationClaims {
   sub: string;
   purpose: ConfirmationPurpose;
+  /** Absent on tokens minted before 054, which were all password confirmations. */
+  method?: ConfirmationMethod;
 }
 
 /**
@@ -93,8 +98,9 @@ export class PasswordConfirmationService {
   issue(
     userId: string,
     purpose: ConfirmationPurpose,
+    method: ConfirmationMethod = 'password',
   ): { confirmationToken: string; expiresAt: string } {
-    const claims: ConfirmationClaims = { sub: userId, purpose };
+    const claims: ConfirmationClaims = { sub: userId, purpose, method };
     return {
       confirmationToken: this.jwt.sign(claims, {
         expiresIn: CONFIRMATION_TTL_SECONDS,
@@ -109,12 +115,14 @@ export class PasswordConfirmationService {
    * Refuses unless `token` is a live confirmation, for this purpose, minted for this caller.
    *
    * The caller check is what stops a token lifted from one administrator's browser being
-   * replayed under another account's session.
+   * replayed under another account's session. `passwordOnly` refuses a face confirmation — for
+   * changing the face itself, so a face that once passed cannot re-register itself (054).
    */
   assertConfirmed(
     token: string | string[] | undefined,
     userId: string,
     purpose: ConfirmationPurpose,
+    { passwordOnly = false }: { passwordOnly?: boolean } = {},
   ): void {
     const raw = Array.isArray(token) ? token[0] : token;
     let claims: ConfirmationClaims | null = null;
@@ -125,7 +133,12 @@ export class PasswordConfirmationService {
         claims = null;
       }
     }
-    if (!claims || claims.sub !== userId || claims.purpose !== purpose) {
+    if (
+      !claims ||
+      claims.sub !== userId ||
+      claims.purpose !== purpose ||
+      (passwordOnly && (claims.method ?? 'password') !== 'password')
+    ) {
       throw new ForbiddenException({
         statusCode: 403,
         code: CONFIRMATION_REQUIRED,

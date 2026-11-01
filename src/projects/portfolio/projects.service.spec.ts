@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 import {
   callerFor,
@@ -308,13 +309,22 @@ describe('ProjectsService.update — the lock permission', () => {
     const update = jest
       .fn()
       .mockImplementation(({ data }) =>
-        Promise.resolve({ id: 'project-1', companyId: 'company-1', isLocked, ...data }),
+        Promise.resolve({
+          id: 'project-1',
+          companyId: 'company-1',
+          isLocked,
+          ...data,
+        }),
       );
     const prisma = createPrismaMock({
       project: {
         findUnique: jest
           .fn()
-          .mockResolvedValue({ id: 'project-1', companyId: 'company-1', isLocked }),
+          .mockResolvedValue({
+            id: 'project-1',
+            companyId: 'company-1',
+            isLocked,
+          }),
         update,
       },
     });
@@ -388,5 +398,90 @@ describe('ProjectsService.update — the lock permission', () => {
       '10.0.0.1',
     );
     expect(update).toHaveBeenCalled();
+  });
+});
+
+describe('ProjectsService.getMoneyPosition (054 dashboard cards)', () => {
+  const D = (v: number) => new Prisma.Decimal(v);
+  const noDeductions = {
+    retentionAmount: null,
+    cpbgAmount: null,
+    tdsAmount: null,
+    otherDeduction: null,
+  };
+
+  it('splits contract value by status and reads bills as their receipts screen does', async () => {
+    const prisma = createPrismaMock({
+      project: {
+        groupBy: jest.fn().mockResolvedValue([
+          { status: 'ongoing', _sum: { contractValue: D(100) } },
+          { status: 'completed', _sum: { contractValue: D(50) } },
+        ]),
+      },
+      clientBill: {
+        findMany: jest.fn().mockResolvedValue([
+          // Certified: worth what the client certified, not what was billed.
+          {
+            id: 'b1',
+            grossAmount: D(1100),
+            certifiedAmount: D(1000),
+            package: null,
+          },
+          {
+            id: 'b2',
+            grossAmount: D(500),
+            certifiedAmount: null,
+            package: null,
+          },
+          // A live package: its work plus GST.
+          {
+            id: 'b3',
+            grossAmount: D(999),
+            certifiedAmount: null,
+            package: {
+              status: 'issued',
+              workDone: D(200),
+              cgstAmount: D(18),
+              sgstAmount: D(18),
+              igstAmount: D(0),
+            },
+          },
+        ]),
+      },
+      clientBillReceipt: {
+        groupBy: jest.fn().mockResolvedValue([
+          // 800 paid, 50 retained, 20 TDS: 870 settled of 1000.
+          {
+            clientBillId: 'b1',
+            _sum: {
+              ...noDeductions,
+              amount: D(800),
+              retentionAmount: D(50),
+              tdsAmount: D(20),
+            },
+          },
+          // Overpaid: counts as received, never as negative outstanding.
+          { clientBillId: 'b2', _sum: { ...noDeductions, amount: D(600) } },
+        ]),
+      },
+    });
+    const service = new ProjectsService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      COMPANIES_041 as never,
+    );
+
+    await expect(service.getMoneyPosition('company-1')).resolves.toEqual({
+      ongoingContractValue: 100,
+      completedContractValue: 50,
+      billed: 1736,
+      received: 1400,
+      outstanding: 366,
+    });
   });
 });

@@ -31,29 +31,43 @@ const asRecord = (value: Prisma.JsonValue | null) =>
     : null;
 
 const PURPOSES: Record<string, string> = {
-  'cash-visibility': 'Personal Settings',
+  'cash-visibility': 'App Settings',
 };
+
+/**
+ * The cash switch. Rows written before 2026-10-15 carry no `event`, so they are known by their
+ * shape: a company update holding only the switch and the confirmation. Its raw change is never
+ * exported either (2026-11-01) — the field name would say what "Updated app settings" hides.
+ */
+export function isCashSwitch(row: Row): boolean {
+  const changes = asRecord(row.changes);
+  if (!changes) return false;
+  return (
+    changes.event === 'cash_visibility_changed' ||
+    (row.entityType === AuditEntityType.COMPANY &&
+      'hideCashTransactions' in changes &&
+      'confirmedByPassword' in changes)
+  );
+}
 
 /** A sentence for an event "Viewed" or "Updated" would misdescribe; `null` for every other row. */
 export function describeEvent(row: Row): string | null {
   const changes = asRecord(row.changes);
   if (!changes) return null;
-  if (changes.event === 'password_confirmed') {
-    const purpose = PURPOSES[String(changes.purpose)] ?? 'a sensitive setting';
-    return `Confirmed their password for ${purpose}`;
-  }
-  // The cash switch. Rows written before 2026-10-15 carry no `event`, so they are known by
-  // their shape: a company update holding only the switch and the confirmation.
-  if (
-    changes.event === 'cash_visibility_changed' ||
-    (row.entityType === AuditEntityType.COMPANY &&
-      'hideCashTransactions' in changes &&
-      'confirmedByPassword' in changes)
-  ) {
-    return changes.hideCashTransactions
-      ? 'Hid cash transactions'
-      : 'Showed cash transactions';
-  }
+  const purpose = PURPOSES[String(changes.purpose)] ?? 'a sensitive setting';
+  // 054: face unlock, in the same words as the password it stands in for.
+  const confirmations: Record<string, string> = {
+    password_confirmed: `Confirmed their password for ${purpose}`,
+    password_confirmation_failed: `Wrong password for ${purpose}`,
+    face_confirmed: `Confirmed their face for ${purpose}`,
+    face_confirmation_failed: `Face not recognised for ${purpose}`,
+    face_unlock_enrolled: `Set up face unlock for ${purpose}`,
+    face_unlock_removed: `Removed face unlock for ${purpose}`,
+  };
+  const confirmation = confirmations[String(changes.event)];
+  if (confirmation) return confirmation;
+  // Never which way it went (2026-11-01): the log must not say the switch exists.
+  if (isCashSwitch(row)) return 'Updated app settings';
   if (changes.event === 'bulk_shift_change') {
     const n = Number(changes.count);
     return `Moved ${n} employee${n === 1 ? '' : 's'} to the ${String(
