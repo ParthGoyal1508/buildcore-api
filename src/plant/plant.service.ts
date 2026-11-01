@@ -1,10 +1,16 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { HireBillStatus } from '@prisma/client';
+import {
+  HireBillStatus,
+  JobCardPaymentMode,
+  JobCardStatus,
+  ServiceBillPaymentStatus,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { DISPOSED_STATUSES } from './disposal/in-service';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
+import { isCashHiddenTx } from '../common/cash/cash-policy';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { companyScope } from '../settings/company-scope';
 import {
@@ -649,5 +655,74 @@ export class PlantService implements OnModuleInit {
       );
       return [];
     }
+  }
+
+  /**
+   * What the company still owes plant vendors (054, the dashboard's Outgoing panel), split by
+   * the permission that shows each on screen:
+   * - `hire`: hire bills not yet paid, at their net payable — the Hire Bills screen's
+   *   `unpaidTotal`. A hire bill is paid whole, so there is no part-payment to subtract.
+   * - `maintenance`: service bills' net payable less paid — the Service Bills screen's
+   *   `pendingPaymentTotal` — plus each job card's uploaded bill less its payments, without cash
+   *   payments while cash is hidden (038), as the job card's own balance reads.
+   */
+  async unpaidBillsTotals(
+    companyId: string,
+  ): Promise<{ hire: number; maintenance: number }> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      async (tx) => {
+        const cashHidden = await isCashHiddenTx(tx, companyId);
+        const [hire, service, jobs] = await Promise.all([
+          tx.hireBill.aggregate({
+            where: { companyId, status: { not: HireBillStatus.paid } },
+            _sum: { netPayable: true },
+          }),
+          tx.serviceBill.findMany({
+            where: {
+              companyId,
+              deletedAt: null,
+              paymentStatus: { not: ServiceBillPaymentStatus.paid },
+            },
+            select: { netPayable: true, paidAmount: true },
+          }),
+          tx.maintenanceJob.findMany({
+            where: {
+              companyId,
+              jobCardStatus: JobCardStatus.bill_uploaded,
+              finalBillAmount: { not: null },
+            },
+            select: {
+              finalBillAmount: true,
+              jobCardPayments: {
+                where: cashHidden
+                  ? { mode: { not: JobCardPaymentMode.cash } }
+                  : {},
+                select: { amount: true },
+              },
+            },
+          }),
+        ]);
+        const serviceOwed = service.reduce(
+          (sum, bill) =>
+            sum +
+            Math.max(0, Number(bill.netPayable) - Number(bill.paidAmount)),
+          0,
+        );
+        const jobsOwed = jobs.reduce((sum, job) => {
+          const paid = job.jobCardPayments.reduce(
+            (s, p) => s + Number(p.amount),
+            0,
+          );
+          return sum + Math.max(0, Number(job.finalBillAmount) - paid);
+        }, 0);
+        const round = (v: number) => Math.round(v * 100) / 100;
+        return {
+          hire: round(Number(hire._sum.netPayable ?? 0)),
+          maintenance: round(serviceOwed + jobsOwed),
+        };
+      },
+    );
   }
 }

@@ -297,9 +297,50 @@ export class BillPaymentsService {
     ctx: RlsContext,
     projectId: string,
   ): Promise<ProjectBillingPosition> {
+    return this.positionWhere(ctx, { projectId });
+  }
+
+  /**
+   * The company's position across every subcontractor bill, plus the retention it still holds
+   * back from them (054, the dashboard's Outgoing and Held panels). The same rules as
+   * {@link positionForProject}, and retention as `retentionBalance` keeps it: withheld on bills
+   * past draft, less what has been released.
+   */
+  async positionForCompany(
+    companyId: string,
+  ): Promise<ProjectBillingPosition & { retentionHeld: string }> {
+    const ctx: RlsContext = { isSuperAdmin: false, companyId };
+    const [position, retention] = await Promise.all([
+      this.positionWhere(ctx, { companyId }),
+      withRlsContext(this.prisma, ctx, (tx) =>
+        Promise.all([
+          tx.rABill.aggregate({
+            where: { companyId, status: { not: RaBillStatus.draft } },
+            _sum: { retentionAmount: true },
+          }),
+          tx.retentionRelease.aggregate({
+            where: { companyId },
+            _sum: { amount: true },
+          }),
+        ]),
+      ),
+    ]);
+    const [withheld, released] = retention;
+    return {
+      ...position,
+      retentionHeld: (withheld._sum.retentionAmount ?? ZERO)
+        .minus(released._sum.amount ?? ZERO)
+        .toFixed(2),
+    };
+  }
+
+  private async positionWhere(
+    ctx: RlsContext,
+    where: Prisma.RABillWhereInput,
+  ): Promise<ProjectBillingPosition> {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const bills = await tx.rABill.findMany({
-        where: { projectId },
+        where,
         select: {
           companyId: true,
           status: true,

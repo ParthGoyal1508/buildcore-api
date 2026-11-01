@@ -9,7 +9,9 @@ export type WidgetSection =
   | 'alerts'
   | 'table'
   | 'group'
-  | 'site';
+  | 'site'
+  /** 054: the money panels — from clients, held, outgoing. */
+  | 'money';
 
 /** How the frontend renders a widget's value (data-model.md). */
 export type WidgetDisplayType = 'kpi' | 'table' | 'list' | 'stat';

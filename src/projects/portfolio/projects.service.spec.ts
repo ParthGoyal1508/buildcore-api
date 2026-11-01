@@ -306,25 +306,21 @@ describe('ProjectsService.remove', () => {
  */
 describe('ProjectsService.update — the lock permission', () => {
   const build = (isLocked: boolean) => {
-    const update = jest
-      .fn()
-      .mockImplementation(({ data }) =>
-        Promise.resolve({
+    const update = jest.fn().mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: 'project-1',
+        companyId: 'company-1',
+        isLocked,
+        ...data,
+      }),
+    );
+    const prisma = createPrismaMock({
+      project: {
+        findUnique: jest.fn().mockResolvedValue({
           id: 'project-1',
           companyId: 'company-1',
           isLocked,
-          ...data,
         }),
-      );
-    const prisma = createPrismaMock({
-      project: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue({
-            id: 'project-1',
-            companyId: 'company-1',
-            isLocked,
-          }),
         update,
       },
     });
@@ -463,6 +459,13 @@ describe('ProjectsService.getMoneyPosition (054 dashboard cards)', () => {
           // Overpaid: counts as received, never as negative outstanding.
           { clientBillId: 'b2', _sum: { ...noDeductions, amount: D(600) } },
         ]),
+        aggregate: jest.fn().mockResolvedValue({
+          _sum: { retentionAmount: D(50), cpbgAmount: D(30) },
+        }),
+      },
+      // 20 of the retention released back: 60 still held.
+      clientHoldRelease: {
+        aggregate: jest.fn().mockResolvedValue({ _sum: { amount: D(20) } }),
       },
     });
     const service = new ProjectsService(
@@ -482,6 +485,7 @@ describe('ProjectsService.getMoneyPosition (054 dashboard cards)', () => {
       billed: 1736,
       received: 1400,
       outstanding: 366,
+      heldByClients: 60,
     });
   });
 });

@@ -74,6 +74,14 @@ export interface ProjectMoneyPosition {
   billed: number;
   received: number;
   outstanding: number;
+  /** Retention and CPBG clients have kept back from receipts, less what they have released. */
+  heldByClients: number;
+}
+
+/** What the company owes its subcontractors, and the retention it keeps back from them (054). */
+export interface SubcontractorMoneyPosition {
+  outstanding: number;
+  retentionHeld: number;
 }
 
 export interface ProjectListItem {
@@ -1037,7 +1045,7 @@ export class ProjectsService {
       this.prisma,
       { isSuperAdmin: false, companyId },
       async (tx) => {
-        const [byStatus, bills, receipts] = await Promise.all([
+        const [byStatus, bills, receipts, held, released] = await Promise.all([
           tx.project.groupBy({
             by: ['status'],
             where: {
@@ -1076,6 +1084,16 @@ export class ProjectsService {
               tdsAmount: true,
               otherDeduction: true,
             },
+          }),
+          // Held by clients as `ClientReceiptsService.holdings` counts it, company-wide: every
+          // receipt's retention and CPBG, less what has been released or refunded.
+          tx.clientBillReceipt.aggregate({
+            where: { companyId },
+            _sum: { retentionAmount: true, cpbgAmount: true },
+          }),
+          tx.clientHoldRelease.aggregate({
+            where: { companyId },
+            _sum: { amount: true },
           }),
         ]);
 
@@ -1119,9 +1137,25 @@ export class ProjectsService {
           billed: billed.toNumber(),
           received: received.toNumber(),
           outstanding: outstanding.toNumber(),
+          heldByClients: zero
+            .plus(held._sum.retentionAmount ?? 0)
+            .plus(held._sum.cpbgAmount ?? 0)
+            .minus(released._sum.amount ?? 0)
+            .toNumber(),
         };
       },
     );
+  }
+
+  /** The company's subcontractor position, through the one place RA-bill money is defined. */
+  async getSubcontractorPosition(
+    companyId: string,
+  ): Promise<SubcontractorMoneyPosition> {
+    const position = await this.billPayments.positionForCompany(companyId);
+    return {
+      outstanding: Number(position.outstandingAmount),
+      retentionHeld: Number(position.retentionHeld),
+    };
   }
 
   /**

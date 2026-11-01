@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { PurchaseStatus } from '@prisma/client';
+import { PurchaseBillStatus, PurchaseStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
@@ -15,6 +15,12 @@ import {
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { ItemsService } from '../settings/item-masters/items.service';
 import { companyScope } from '../settings/company-scope';
+import {
+  billStatusFilterTx,
+  billWithoutHiddenCash,
+  cashHiddenCompaniesTx,
+  hiddenCashByBillTx,
+} from './payments/cash-hiding';
 import { PurchasesService } from './purchases/purchases.service';
 import { inStockOf, toNumber } from './stock/stock.types';
 
@@ -384,5 +390,50 @@ export class InventoryService implements OnModuleInit {
       }),
     );
     return purchase ? { ...purchase, amount: Number(purchase.amount) } : null;
+  }
+
+  /**
+   * What the company still owes on its material purchase bills (054, the dashboard's Outgoing
+   * panel): the same figure as the vendor payment screen's `totalOutstanding`, for every vendor —
+   * bills not yet paid, each worth its total less what has been allocated to it, with hidden cash
+   * left out of the paid side (038).
+   */
+  async unpaidBillsTotal(companyId: string): Promise<number> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      async (tx) => {
+        const base = { companyId };
+        const hidden = await cashHiddenCompaniesTx(tx, base);
+        const status = await billStatusFilterTx(tx, {
+          base,
+          hidden,
+          matches: { paymentStatus: { not: PurchaseBillStatus.paid } },
+          accepts: (s) => s !== PurchaseBillStatus.paid,
+        });
+        const bills = await tx.purchaseBill.findMany({
+          where: { AND: [base, status] },
+          select: {
+            id: true,
+            totalAmount: true,
+            paidAmount: true,
+            paymentStatus: true,
+          },
+        });
+        const cash = await hiddenCashByBillTx(
+          tx,
+          bills.map((bill) => bill.id),
+          hidden,
+        );
+        const owed = bills.reduce((sum, row) => {
+          const bill = billWithoutHiddenCash(row, cash);
+          return (
+            sum +
+            Math.max(0, toNumber(bill.totalAmount) - toNumber(bill.paidAmount))
+          );
+        }, 0);
+        return Math.round(owed * 100) / 100;
+      },
+    );
   }
 }

@@ -7,6 +7,7 @@ import { HrModule } from '../hr/hr.module';
 import { PayrollModule } from '../payroll/payroll.module';
 import { PlantModule } from '../plant/plant.module';
 import { InventoryModule } from '../inventory/inventory.module';
+import { LabourModule } from '../labour/labour.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ActivityLogController } from './activity-log/activity-log.controller';
@@ -71,6 +72,7 @@ import {
   BilledAmountWidget,
   CompletedContractValueWidget,
   ContractValueWidget,
+  HeldByClientsWidget,
   MachineryAtSiteWidget,
   MachineryDeployedWidget,
   MaterialStockValueWidget,
@@ -81,6 +83,15 @@ import {
   SiteFuelConsumptionWidget,
   TotalMachineryWidget,
 } from './widgets/module-kpi.providers';
+import {
+  HeldFromSubcontractorsWidget,
+  LabourPayableWidget,
+  MaterialPayableWidget,
+  OutgoingSources,
+  PlantPayableWidget,
+  SubcontractorPayableWidget,
+  TotalPayableWidget,
+} from './widgets/money-panel.providers';
 import { WIDGET_PROVIDERS, type WidgetProvider } from './widgets/widget.types';
 import type { NotificationProvider } from './notifications/notification.types';
 import type { ReportProvider } from './reports/report.types';
@@ -140,6 +151,14 @@ const WIDGET_CLASSES = [
   SiteFuelConsumedWidget,
   SiteFuelConsumptionWidget,
   AlertsRemindersWidget,
+  // 054: the Held and Outgoing money panels.
+  HeldByClientsWidget,
+  HeldFromSubcontractorsWidget,
+  MaterialPayableWidget,
+  SubcontractorPayableWidget,
+  LabourPayableWidget,
+  PlantPayableWidget,
+  TotalPayableWidget,
 ] as const;
 
 const NOTIFICATION_CLASSES = [
@@ -192,6 +211,13 @@ const widgetRegistry: Provider = {
     siteFuelConsumed: WidgetProvider,
     siteFuelConsumption: WidgetProvider,
     alertsReminders: WidgetProvider,
+    heldByClients: WidgetProvider,
+    heldFromSubcontractors: WidgetProvider,
+    materialPayable: WidgetProvider,
+    subcontractorPayable: WidgetProvider,
+    labourPayable: WidgetProvider,
+    plantPayable: WidgetProvider,
+    totalPayable: WidgetProvider,
   ): WidgetProvider[] => [
     // Company dashboard — contract order.
     totalEmployees,
@@ -209,6 +235,13 @@ const widgetRegistry: Provider = {
     billedAmount,
     receivedAmount,
     receivableAmount,
+    heldByClients,
+    heldFromSubcontractors,
+    materialPayable,
+    subcontractorPayable,
+    labourPayable,
+    plantPayable,
+    totalPayable,
     musterStat,
     alertsReminders,
     todayAttendanceTable,
@@ -275,6 +308,8 @@ const reportRegistry: Provider = {
     HrModule,
     // For `InventoryService` — the Materials Cost card (2026-10-12).
     InventoryModule,
+    // 054: `LabourService.wagesOwed`, for the Outgoing panel.
+    LabourModule,
     ProjectsModule,
     SettingsModule,
     PlantModule,
@@ -295,6 +330,8 @@ const reportRegistry: Provider = {
     RemindersService,
     ReminderRuleRegistry,
     ReminderEvaluationCron,
+    // 054: shared reads behind the Outgoing and Held money cards.
+    OutgoingSources,
     // Declared here rather than imported from AuthModule, matching every other
     // feature module: the service is stateless, and AuthModule does not export it.
     AuditLogService,
