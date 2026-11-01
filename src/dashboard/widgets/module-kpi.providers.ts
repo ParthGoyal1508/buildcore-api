@@ -3,7 +3,10 @@ import { Permission, ProjectStatus } from '@prisma/client';
 
 import { InventoryService } from '../../inventory/inventory.service';
 import { PlantService } from '../../plant/plant.service';
-import { ProjectsService } from '../../projects/portfolio/projects.service';
+import {
+  type ProjectMoneyPosition,
+  ProjectsService,
+} from '../../projects/portfolio/projects.service';
 import { RemindersService } from '../reminders/reminders.service';
 import type { DashboardContext } from '../context';
 import { once } from '../context';
@@ -147,31 +150,74 @@ export class ActiveProjectsWidget implements WidgetProvider {
 }
 
 /**
- * The company's committed contract value (spec FR-005).
+ * The company's money across projects (054, 2026-11-01 — the client: "instead of showing
+ * Contract value as total amount, show contract value of ongoing projects, completed projects,
+ * billed amount, received amount, remaining amount yet to receive from billed").
  *
- * `PROJECT_FINANCIALS`, not `PROJECTS`: the order book is a commercial figure, and 009
- * established that a site engineer who may open the portfolio has no business reading
- * what the company is worth. Someone holding either may see it, matching how the
- * portfolio screen shows contract value to both.
+ * Five cards over one read: `ProjectsService.getMoneyPosition`, fetched once per dashboard
+ * request and shared through `once`. Until 054 there was one Contract Value card, which summed
+ * every project whatever its status, although its caption said "ongoing".
+ *
+ * `PROJECT_FINANCIALS` or `PROJECTS`, as the Contract Value card always required: the order book
+ * is a commercial figure, and the portfolio screen shows it to both.
  */
+// `@Injectable()` on the base too: the subclasses inherit its constructor, and Nest reads the
+// parameter types from the class that declares it — without this, `projects` arrives undefined.
 @Injectable()
-export class ContractValueWidget implements WidgetProvider {
-  readonly id = 'contract-value';
+abstract class ProjectMoneyWidget implements WidgetProvider {
+  abstract readonly id: string;
+  abstract readonly title: string;
+  protected abstract readonly figure: keyof ProjectMoneyPosition;
   readonly displayType = 'kpi' as const;
-  readonly title = 'Contract Value';
   readonly valueUnit = 'currency' as const;
   readonly section = 'sidebar' as const;
   readonly requires = [Permission.PROJECT_FINANCIALS, Permission.PROJECTS];
-  constructor(private readonly projects: ProjectsService) {}
+  constructor(protected readonly projects: ProjectsService) {}
   isAvailable(): boolean {
     return this.projects.isPortfolioAvailable();
   }
   async compute(ctx: DashboardContext): Promise<number> {
-    const rows = await once(ctx, 'projects:contractValues', () =>
-      this.projects.getProjectsWithContractValues(ctx.companyId),
+    const position = await once(ctx, 'projects:moneyPosition', () =>
+      this.projects.getMoneyPosition(ctx.companyId),
     );
-    return rows.reduce((total, row) => total + row.contractValue, 0);
+    return position[this.figure];
   }
+}
+
+/** Contract value of ongoing projects. Keeps the old card's id, so its link and place stay. */
+@Injectable()
+export class ContractValueWidget extends ProjectMoneyWidget {
+  readonly id = 'contract-value';
+  readonly title = 'Contract Value (Ongoing)';
+  protected readonly figure = 'ongoingContractValue';
+}
+
+@Injectable()
+export class CompletedContractValueWidget extends ProjectMoneyWidget {
+  readonly id = 'contract-value-completed';
+  readonly title = 'Contract Value (Completed)';
+  protected readonly figure = 'completedContractValue';
+}
+
+@Injectable()
+export class BilledAmountWidget extends ProjectMoneyWidget {
+  readonly id = 'billed-amount';
+  readonly title = 'Billed';
+  protected readonly figure = 'billed';
+}
+
+@Injectable()
+export class ReceivedAmountWidget extends ProjectMoneyWidget {
+  readonly id = 'received-amount';
+  readonly title = 'Received';
+  protected readonly figure = 'received';
+}
+
+@Injectable()
+export class ReceivableAmountWidget extends ProjectMoneyWidget {
+  readonly id = 'receivable-amount';
+  readonly title = 'Yet to Receive';
+  protected readonly figure = 'outstanding';
 }
 
 /** Equipment on the register (spec FR-005). */
