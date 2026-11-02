@@ -6,6 +6,8 @@ import { PrismaService } from 'nestjs-prisma';
 import type { RlsContext } from '../../../common/prisma/rls-context';
 import { withRlsContext } from '../../../common/prisma/rls-context';
 import { rupeesInWords } from '../../../common/rupees-in-words';
+import type { CompanyHeader } from '../../../common/document-header/company-header';
+import { CompaniesService } from '../../../settings/companies/companies.service';
 import { BillDocxRenderer } from '../workbook/bill-docx.renderer';
 import { BillPdfRenderer } from '../workbook/bill-pdf.renderer';
 import { BillWorkbookRenderer } from '../workbook/bill-workbook.renderer';
@@ -45,6 +47,7 @@ export class BillPackageViewBuilder {
     private readonly renderer: BillWorkbookRenderer,
     private readonly pdf: BillPdfRenderer,
     private readonly docx: BillDocxRenderer,
+    private readonly companies: CompaniesService,
   ) {}
 
   /**
@@ -69,7 +72,10 @@ export class BillPackageViewBuilder {
       format === 'xlsx'
         ? await this.renderer.render(view, options)
         : format === 'pdf'
-        ? await this.pdf.render(view, options)
+        ? await this.pdf.render(
+            { ...view, brand: await this.brandFor(ctx, packageId) },
+            options,
+          )
         : await this.docx.render(view, options);
     const party =
       view.header.direction === 'to_client'
@@ -87,6 +93,33 @@ export class BillPackageViewBuilder {
       }.${format}`,
       missingFields: view.header.missingFields,
     };
+  }
+
+  /**
+   * The company band the PDF opens each page with (055): the company as the project's branch, with
+   * its logo and the offices, email and website. Null leaves the format's own heading alone.
+   */
+  private async brandFor(
+    ctx: RlsContext,
+    packageId: string,
+  ): Promise<CompanyHeader | undefined> {
+    const pkg = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: { companyId: true, project: { select: { branchId: true } } },
+      }),
+    );
+    if (!pkg) return undefined;
+    const identity = await this.companies
+      .getDocumentIdentity(pkg.companyId, pkg.project?.branchId)
+      .catch(() => null);
+    return identity
+      ? {
+          name: identity.name,
+          logo: identity.logo,
+          lines: identity.contactLines,
+        }
+      : undefined;
   }
 
   /**

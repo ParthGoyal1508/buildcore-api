@@ -84,6 +84,16 @@ const SERIF = 'Times-Roman';
 const SERIF_BOLD = 'Times-Bold';
 const MARGIN = 28;
 const PAD = 3;
+/** The header's measures (055): the client asked for a bigger logo, name and type. */
+const NAME_SIZE = 18;
+const LINE_SIZE = 8.5;
+const TITLE_SIZE = 13.5;
+const LOGO_HEIGHT = 60;
+/** Cell and field text: 8pt until 055. */
+const BODY_SIZE = 8.5;
+/** Terms: each section's heading, bold and underlined, and its clauses (9.5 and 9 until 055). */
+const CLAUSE_HEAD_SIZE = 10.5;
+const CLAUSE_SIZE = 9.5;
 
 export async function renderFormPdf(form: FormDocument): Promise<Buffer> {
   const doc = new PDFDocument({
@@ -146,7 +156,7 @@ class FormPdf {
   ) {
     this.doc
       .font(o.font ?? REGULAR)
-      .fontSize(o.size ?? 8)
+      .fontSize(o.size ?? BODY_SIZE)
       .fillColor(o.color ?? '#000000')
       .text(value, x, y, {
         width: Math.max(1, w),
@@ -157,7 +167,7 @@ class FormPdf {
     this.doc.fillColor('#000000');
   }
 
-  private height(value: string, w: number, size = 8, font = REGULAR) {
+  private height(value: string, w: number, size = BODY_SIZE, font = REGULAR) {
     if (!value) return 0;
     return this.doc
       .font(font)
@@ -193,55 +203,83 @@ class FormPdf {
   private header() {
     const { company, subHeading = [], title, caption } = this.form;
     const W = this.width;
-    const logoW = 90;
+    // A bigger logo and name, and the offices, email and website under it (055).
+    const logoW = 130;
+    const lines = company.lines?.length
+      ? company.lines
+      : company.address
+      ? [company.address]
+      : [];
+    const linesHeight = (w: number) =>
+      lines.reduce((sum, line) => sum + this.height(line, w, LINE_SIZE) + 1, 0);
 
     if (this.p.band) {
       // Navy: name (and project) on a dark band, the title on a pale one beneath it.
-      const nameH = this.height(company.name, W - logoW * 2, 15, BOLD);
+      const nameH = this.height(company.name, W - logoW - 12, NAME_SIZE, BOLD);
       const subH = subHeading.reduce(
-        (sum, line) => sum + this.height(line, W - logoW * 2, 8.5, BOLD) + 1,
+        (sum, line) => sum + this.height(line, W - logoW - 12, 8.5, BOLD) + 1,
         0,
       );
-      const addressH = company.address
-        ? this.height(company.address, W - logoW * 2, 7.5)
-        : 0;
-      const bandH = Math.max(44, nameH + subH + addressH + 16);
+      const addressH = linesHeight(W - logoW - 12);
+      const bandH = Math.max(64, nameH + subH + addressH + 16);
       this.doc.save().rect(this.x0, this.y, W, bandH).fill(this.p.band);
       this.doc.restore();
-      this.logo(this.x0 + 6, this.y + 5, logoW - 12, bandH - 10);
+      // On a white panel (055): a dark logo vanished into the navy band.
+      if (company.logo) {
+        this.doc
+          .save()
+          .roundedRect(
+            this.x0 + 6,
+            this.y + Math.max(6, (bandH - 76) / 2),
+            logoW - 12,
+            Math.min(76, bandH - 12),
+            4,
+          )
+          .fill('#FFFFFF')
+          .restore();
+      }
+      this.logo(
+        this.x0 + 10,
+        this.y + Math.max(10, (bandH - 68) / 2),
+        logoW - 20,
+        Math.min(68, bandH - 20),
+      );
       let ty = this.y + 7;
-      this.text(company.name, this.x0 + logoW, ty, W - logoW * 2, {
+      this.text(company.name, this.x0 + logoW + 6, ty, W - logoW - 12, {
         font: BOLD,
-        size: 15,
+        size: NAME_SIZE,
         align: 'center',
         color: this.p.name,
       });
       ty += nameH + 1;
-      if (company.address) {
-        this.text(company.address, this.x0 + logoW, ty, W - logoW * 2, {
-          size: 7.5,
+      for (const line of lines) {
+        this.text(line, this.x0 + logoW + 6, ty, W - logoW - 12, {
+          size: LINE_SIZE,
           align: 'center',
           color: '#DCE6F2',
         });
-        ty += addressH + 1;
+        ty += this.height(line, W - logoW - 12, LINE_SIZE) + 1;
       }
       for (const line of subHeading) {
-        this.text(line, this.x0 + logoW, ty, W - logoW * 2, {
+        this.text(line, this.x0 + logoW + 6, ty, W - logoW - 12, {
           font: BOLD,
           size: 8.5,
           align: 'center',
           color: '#DCE6F2',
         });
-        ty += this.height(line, W - logoW * 2, 8.5, BOLD) + 1;
+        ty += this.height(line, W - logoW - 12, 8.5, BOLD) + 1;
       }
       this.y += bandH;
       const capH = caption ? this.height(caption, W, 8) + 1 : 0;
-      const titleH = Math.max(22, this.height(title, W, 12, BOLD) + capH + 10);
+      const titleH = Math.max(
+        24,
+        this.height(title, W, TITLE_SIZE, BOLD) + capH + 10,
+      );
       this.doc.save().rect(this.x0, this.y, W, titleH).fill('#D9EAF7');
       this.doc.restore();
       this.text(title, this.x0, this.y + 5, W, {
         font: BOLD,
-        size: 12,
+        size: TITLE_SIZE,
         align: 'center',
         color: '#17365D',
       });
@@ -249,7 +287,7 @@ class FormPdf {
         this.text(
           caption,
           this.x0,
-          this.y + 5 + this.height(title, W, 12, BOLD),
+          this.y + 5 + this.height(title, W, TITLE_SIZE, BOLD),
           W,
           { font: ITALIC, size: 8, align: 'center', color: '#333333' },
         );
@@ -258,47 +296,64 @@ class FormPdf {
       return;
     }
 
+    // Logo left, the name and its lines beside it across the rest of the width (055 — centred
+    // between two logo-wide margins, an address wrapped into four short lines), a rule, then the
+    // title centred across the page.
     const top = this.y;
-    const hasLogo = this.logo(this.x0, top, logoW, 40);
-    const inner = hasLogo ? W - logoW * 2 : W;
-    const ix = hasLogo ? this.x0 + logoW : this.x0;
+    const hasLogo = this.logo(this.x0, top, logoW, LOGO_HEIGHT);
+    const inner = hasLogo ? W - logoW - 12 : W;
+    const ix = hasLogo ? this.x0 + logoW + 12 : this.x0;
+    const align: FormAlign = hasLogo ? 'left' : 'center';
     let ty = top + 2;
-    this.text(company.name, ix, ty, inner, {
+    this.text(company.name.toUpperCase(), ix, ty, inner, {
       font: BOLD,
-      size: 15,
-      align: 'center',
+      size: NAME_SIZE,
+      align,
       color: this.p.name,
     });
-    ty += this.height(company.name, inner, 15, BOLD) + 1;
-    if (company.address) {
-      this.text(company.address, ix, ty, inner, {
-        size: 7.5,
-        align: 'center',
-        color: '#444444',
+    ty += this.height(company.name.toUpperCase(), inner, NAME_SIZE, BOLD) + 2;
+    for (const line of lines) {
+      this.text(line, ix, ty, inner, {
+        size: LINE_SIZE,
+        align,
+        color: '#333333',
       });
-      ty += this.height(company.address, inner, 7.5) + 1;
+      ty += this.height(line, inner, LINE_SIZE) + 1;
     }
     for (const line of subHeading) {
       this.text(line, ix, ty, inner, {
         font: BOLD,
-        size: 8.5,
-        align: 'center',
+        size: 9,
+        align,
         color: this.p.name,
       });
-      ty += this.height(line, inner, 8.5, BOLD) + 1;
+      ty += this.height(line, inner, 9, BOLD) + 1;
     }
-    ty += 2;
-    this.text(title, ix, ty, inner, { font: BOLD, size: 12, align: 'center' });
-    ty += this.height(title, inner, 12, BOLD) + 1;
+    ty = Math.max(ty, hasLogo ? top + LOGO_HEIGHT : ty) + 6;
+    this.doc
+      .save()
+      .lineWidth(1)
+      .strokeColor('#333333')
+      .moveTo(this.x0, ty)
+      .lineTo(this.x0 + W, ty)
+      .stroke()
+      .restore();
+    ty += 8;
+    this.text(title, this.x0, ty, W, {
+      font: BOLD,
+      size: TITLE_SIZE,
+      align: 'center',
+    });
+    ty += this.height(title, W, TITLE_SIZE, BOLD) + 1;
     if (caption) {
-      this.text(caption, ix, ty, inner, {
+      this.text(caption, this.x0, ty, W, {
         font: ITALIC,
-        size: 8.5,
+        size: 9,
         align: 'center',
       });
-      ty += this.height(caption, inner, 8.5) + 1;
+      ty += this.height(caption, W, 9) + 1;
     }
-    this.y = Math.max(ty, hasLogo ? top + 42 : ty) + 8;
+    this.y = ty + 8;
   }
 
   /** Draws the logo fitted into the box; false when there is none or it cannot be read. */
@@ -306,7 +361,7 @@ class FormPdf {
     const logo = this.form.company.logo;
     if (!logo) return false;
     try {
-      this.doc.image(logo, x, y, { fit: [w, h] });
+      this.doc.image(logo, x, y, { fit: [w, h], valign: 'center' });
       return true;
     } catch {
       // An image pdfkit cannot read leaves the space blank rather than failing the document.
@@ -418,10 +473,10 @@ class FormPdf {
 
       const heights = r.map((f, i) => {
         const valueW = pairW * spans[i] - labelW - PAD * 2;
-        const labelH = this.height(f.label, labelW - PAD * 2, 8, BOLD);
+        const labelH = this.height(f.label, labelW - PAD * 2, BODY_SIZE, BOLD);
         const valueH = f.options
           ? this.optionLines(f, valueW).length * 11
-          : this.height(f.value ?? '', valueW, 8);
+          : this.height(f.value ?? '', valueW, BODY_SIZE);
         return Math.max(labelH, valueH);
       });
       const h = Math.max(16, ...heights.map((v) => v + PAD * 2 + 1));
@@ -475,7 +530,7 @@ class FormPdf {
 
   private table(block: Extract<FormBlock, { kind: 'table' }>) {
     const W = this.width;
-    const size = block.fontSize ?? 8;
+    const size = block.fontSize ?? BODY_SIZE;
     const total = block.columns.reduce((sum, c) => sum + c.width, 0);
     const widths = block.columns.map((c) => (c.width / total) * W);
     const xs = widths.map((_, i) =>
@@ -757,21 +812,26 @@ class FormPdf {
     const W = this.width;
     sections.forEach((section, si) => {
       const n = startAt + si;
-      const headH = this.height(`${n}. ${section.title}`, W, 9.5, SERIF_BOLD);
+      const headH = this.height(
+        `${n}. ${section.title}`,
+        W,
+        CLAUSE_HEAD_SIZE,
+        SERIF_BOLD,
+      );
       this.ensure(headH + 30);
       this.y += 4;
       this.text(`${n}.  ${section.title}`, this.x0, this.y, W, {
         font: SERIF_BOLD,
-        size: 9.5,
+        size: CLAUSE_HEAD_SIZE,
         underline: true,
       });
       this.y += headH + 3;
       if (section.intro) {
-        const h = this.height(section.intro, W - 30, 9, SERIF);
+        const h = this.height(section.intro, W - 30, CLAUSE_SIZE, SERIF);
         this.ensure(h);
         this.text(section.intro, this.x0 + 30, this.y, W - 30, {
           font: SERIF,
-          size: 9,
+          size: CLAUSE_SIZE,
         });
         this.y += h + 2;
       }
@@ -782,24 +842,30 @@ class FormPdf {
           clause += 1;
           sub = 0;
           const label = `${n}.${clause}`;
-          const h = this.height(c.text, W - 34, 9, SERIF);
+          const h = this.height(c.text, W - 34, CLAUSE_SIZE, SERIF);
           this.ensure(h);
-          this.text(label, this.x0 + 4, this.y, 30, { font: SERIF, size: 9 });
+          this.text(label, this.x0 + 4, this.y, 30, {
+            font: SERIF,
+            size: CLAUSE_SIZE,
+          });
           this.text(c.text, this.x0 + 34, this.y, W - 34, {
             font: SERIF,
-            size: 9,
+            size: CLAUSE_SIZE,
             align: 'justify' as FormAlign,
           });
           this.y += h + 3;
         } else {
           const label = `(${String.fromCharCode(97 + sub)})`;
           sub += 1;
-          const h = this.height(c.text, W - 58, 9, SERIF);
+          const h = this.height(c.text, W - 58, CLAUSE_SIZE, SERIF);
           this.ensure(h);
-          this.text(label, this.x0 + 36, this.y, 22, { font: SERIF, size: 9 });
+          this.text(label, this.x0 + 36, this.y, 22, {
+            font: SERIF,
+            size: CLAUSE_SIZE,
+          });
           this.text(c.text, this.x0 + 58, this.y, W - 58, {
             font: SERIF,
-            size: 9,
+            size: CLAUSE_SIZE,
           });
           this.y += h + 2;
         }

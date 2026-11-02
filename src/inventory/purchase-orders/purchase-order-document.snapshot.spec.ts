@@ -23,6 +23,11 @@ import { renderTemplate } from '../../letters/template-resolver';
  * item-master row). If any of the three snapshots below changes, the printed PO changed: that is a
  * product decision, not a snapshot to update.
  *
+ * **Re-recorded once, for 055 (2026-11-02), on the client's instruction** to format every generated
+ * PDF: the company band (bigger logo and name, registered and corporate offices, email, website),
+ * larger type, and each clause's heading in bold. The body and layout snapshots did not move — the
+ * PO says exactly what it said; only how it is printed changed.
+ *
  * The PDF is compared by a hash of its bytes with pdfkit's two per-run fields — the creation date
  * and the document id — blanked, so the hash moves only when something drawn on the page does.
  */

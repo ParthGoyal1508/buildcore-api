@@ -50,9 +50,25 @@ export class PaymentAdviceRenderer {
     const x = MARGIN;
     let y = MARGIN;
 
-    // ── Band: logo | name and address ────────────────────────────────────
-    const bandHeight = 80;
-    const logoWidth = 170;
+    // ── Band: logo | name, offices, email, website (055: a bigger logo and name) ──
+    const logoWidth = 160;
+    const textX = x + logoWidth + 12;
+    const textWidth = width - logoWidth - 22;
+    const lines = view.company.lines?.length
+      ? view.company.lines
+      : view.company.address
+      ? [`Regd. Office: ${view.company.address}`]
+      : [];
+    doc.font('Helvetica-Bold').fontSize(19);
+    const nameHeight = doc.heightOfString(view.company.name.toUpperCase(), {
+      width: textWidth,
+    });
+    doc.font('Helvetica').fontSize(9);
+    const linesHeight = lines.reduce(
+      (sum, line) => sum + doc.heightOfString(line, { width: textWidth }) + 2,
+      0,
+    );
+    const bandHeight = Math.max(92, 12 + nameHeight + 6 + linesHeight + 10);
     doc.rect(x, y, width, bandHeight).stroke();
     doc
       .moveTo(x + logoWidth, y)
@@ -60,8 +76,8 @@ export class PaymentAdviceRenderer {
       .stroke();
     if (view.company.logo) {
       try {
-        doc.image(view.company.logo, x + 10, y + 10, {
-          fit: [logoWidth - 20, bandHeight - 20],
+        doc.image(view.company.logo, x + 8, y + 8, {
+          fit: [logoWidth - 16, bandHeight - 16],
           align: 'center',
           valign: 'center',
         });
@@ -71,30 +87,25 @@ export class PaymentAdviceRenderer {
     }
     doc
       .font('Helvetica-Bold')
-      .fontSize(18)
-      .text(view.company.name.toUpperCase(), x + logoWidth + 10, y + 14, {
-        width: width - logoWidth - 20,
+      .fontSize(19)
+      .text(view.company.name.toUpperCase(), textX, y + 12, {
+        width: textWidth,
       });
-    if (view.company.address) {
-      doc
-        .font('Helvetica-Bold')
-        .fontSize(9)
-        .text(
-          `Registered Address: - ${view.company.address}`,
-          x + logoWidth + 10,
-          y + 44,
-          { width: width - logoWidth - 20 },
-        );
+    let lineY = y + 12 + nameHeight + 6;
+    doc.font('Helvetica').fontSize(9);
+    for (const line of lines) {
+      doc.text(line, textX, lineY, { width: textWidth });
+      lineY += doc.heightOfString(line, { width: textWidth }) + 2;
     }
     y += bandHeight;
 
     // ── Title ────────────────────────────────────────────────────────────
-    doc.rect(x, y, width, 28).stroke();
+    doc.rect(x, y, width, 30).stroke();
     doc
       .font('Helvetica-Bold')
-      .fontSize(14)
+      .fontSize(15)
       .text(view.title, x, y + 8, { width, align: 'center' });
-    y += 28;
+    y += 30;
 
     // ── Detail grid ──────────────────────────────────────────────────────
     const col = [x, x + 110, x + width / 2, x + width / 2 + 120];
@@ -258,7 +269,7 @@ export class PaymentAdviceRenderer {
               new ImageRun({
                 type: isPng(view.company.logo) ? 'png' : 'jpg',
                 data: view.company.logo,
-                transformation: { width: 170, height: 60 },
+                transformation: { width: 190, height: 72 },
               }),
             ],
           }),
@@ -273,15 +284,13 @@ export class PaymentAdviceRenderer {
             cell(logo, { width: 30 }),
             cell(
               [
-                text(view.company.name.toUpperCase(), { bold: true, size: 32 }),
-                ...(view.company.address
-                  ? [
-                      text(`Registered Address: - ${view.company.address}`, {
-                        bold: true,
-                        size: 17,
-                      }),
-                    ]
-                  : []),
+                text(view.company.name.toUpperCase(), { bold: true, size: 36 }),
+                ...(view.company.lines?.length
+                  ? view.company.lines
+                  : view.company.address
+                  ? [`Regd. Office: ${view.company.address}`]
+                  : []
+                ).map((line) => text(line, { size: 17 })),
               ],
               { width: 70 },
             ),

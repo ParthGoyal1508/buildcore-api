@@ -105,6 +105,7 @@ export class PlantRefsService {
     return {
       name: identity.name,
       address: identity.address,
+      lines: identity.contactLines,
       logo: identity.logo,
       place: identity.place,
     };

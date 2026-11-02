@@ -116,6 +116,16 @@ export class CreateCompanyDto {
   @MaxLength(2_000)
   website?: string;
 
+  /**
+   * The corporate office, one line (055). The address fields above are the registered office (the
+   * head office); this prints beneath it on generated PDFs when filled.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  corporateAddress?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

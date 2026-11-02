@@ -796,6 +796,7 @@ export class StoreDocumentsService {
     return {
       name: identity.name.toUpperCase(),
       address: identity.address,
+      lines: identity.contactLines,
       logo: identity.logo,
     };
   }
