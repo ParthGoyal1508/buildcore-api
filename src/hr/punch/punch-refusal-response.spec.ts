@@ -1,6 +1,8 @@
-import { PunchRefusalReason } from '@prisma/client';
+import { LabourPunchRefusalReason, PunchRefusalReason } from '@prisma/client';
 
+import { labourPunchRefused } from '../../labour/attendance/labour-punch-refusal';
 import {
+  formatDistance,
   PUNCH_REFUSAL_CODES,
   punchRefusedException,
 } from './punch-refusal-response';
@@ -69,5 +71,77 @@ describe('punch refusal responses', () => {
       expect(message.length).toBeGreaterThan(30);
       expect(message).toMatch(/try again|Retake/);
     }
+  });
+
+  // 057: every refusal says what was measured, not only that it failed.
+  describe('measured justification', () => {
+    const messageOf = (e: { getResponse(): unknown }) =>
+      (e.getResponse() as { message: string }).message;
+
+    it('quotes the distance and the fence it was judged against', () => {
+      const message = messageOf(
+        punchRefusedException(PunchRefusalReason.outside_geofence, {
+          distanceMeters: 847,
+          allowedMeters: 230,
+        }),
+      );
+      expect(message).toContain('about 850 m');
+      expect(message).toContain('within 230 m');
+    });
+
+    it('quotes the accuracy against the threshold, and says to switch GPS on', () => {
+      const message = messageOf(
+        punchRefusedException(PunchRefusalReason.unlocatable, {
+          accuracyMeters: 312.4,
+          accuracyMaxMeters: 100,
+        }),
+      );
+      expect(message).toContain('about 312 m');
+      expect(message).toContain('100 m or better');
+      expect(message).toMatch(/Location \(GPS\)/);
+    });
+
+    it('falls back to a plain sentence when nothing was measured', () => {
+      expect(
+        messageOf(punchRefusedException(PunchRefusalReason.outside_geofence)),
+      ).toMatch(/too far/);
+    });
+
+    it('tells "no face" apart from "not your face", under one code', () => {
+      const noFace = punchRefusedException(PunchRefusalReason.no_face_detected);
+      const mismatch = punchRefusedException(PunchRefusalReason.face_mismatch);
+      expect(messageOf(noFace)).toMatch(/No face could be seen/);
+      expect(messageOf(mismatch)).toMatch(/does not match your enrolled face/);
+      expect(PUNCH_REFUSAL_CODES[PunchRefusalReason.no_face_detected]).toBe(
+        PUNCH_REFUSAL_CODES[PunchRefusalReason.face_mismatch],
+      );
+    });
+
+    it('carries the figures in the body for a client to render', () => {
+      const detail = { distanceMeters: 1200, allowedMeters: 200 };
+      expect(
+        punchRefusedException(
+          PunchRefusalReason.outside_geofence,
+          detail,
+        ).getResponse(),
+      ).toMatchObject({ code: 'PUNCH_REFUSED_LOCATION', detail });
+    });
+
+    it('words the labour refusal for the supervisor with the same numbers', () => {
+      const message = messageOf(
+        labourPunchRefused(LabourPunchRefusalReason.outside_geofence, {
+          distanceMeters: 2430,
+          allowedMeters: 150,
+        }),
+      );
+      expect(message).toContain('about 2.4 km from this site');
+      expect(message).toContain('within 150 m');
+    });
+
+    it('rounds distances to what GPS can honestly claim', () => {
+      expect(formatDistance(3)).toBe('10 m');
+      expect(formatDistance(994)).toBe('990 m');
+      expect(formatDistance(1000)).toBe('1.0 km');
+    });
   });
 });

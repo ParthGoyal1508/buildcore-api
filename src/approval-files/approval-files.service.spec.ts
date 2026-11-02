@@ -33,8 +33,8 @@ describe('ApprovalFilesService', () => {
       approvalDocument: jest.fn().mockResolvedValue(null),
     };
     const punches = {
-      hasExceptionPhoto: jest.fn().mockResolvedValue(true),
-      exceptionPhoto: jest.fn(),
+      hasPunchPhoto: jest.fn().mockResolvedValue(true),
+      punchPhoto: jest.fn(),
     };
     const service = new ApprovalFilesService(
       approvals as never,

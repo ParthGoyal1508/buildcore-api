@@ -115,6 +115,24 @@ model UserFaceUnlock {
 /// App Settings is confirmed with a password of its own, not the Super Admin's sign-in password.
 /// It is generated and rotated only by `prisma/rotate-settings-password.ts`: there is no route
 /// that sets it, so nothing in the interface can show or change it. Only the argon2 hash is kept.
+/// A one-time liveness challenge (057): the head-turn sequence a capture must show, issued by the
+/// server so a recorded video cannot know it in advance, valid for two minutes and consumed by the
+/// first submission that presents it. Not tenant data — keyed to whoever asked — so it lives in
+/// `shared` under the Super Admin policy and is touched only by `LivenessService`.
+model LivenessChallenge {
+  id        String    @id @default(cuid())
+  /// Who may present it: the caller's user id, the purpose, and for labour the worker.
+  subject   String
+  /// `straight`, `left`, `right` — the frames expected, in order.
+  steps     String[]
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([expiresAt])
+  @@schema("shared")
+}
+
 model ConfirmationSecret {
   /// A `CONFIRMATION_PURPOSES` key, e.g. `cash-visibility`.
   purpose   String   @id
@@ -642,21 +660,16 @@ model Company {
   /// Whether a punch that fails location or face validation is **refused** rather than recorded as
   /// an exception for an admin (020 FR-013).
   ///
-  /// **Default false, and that is the point.** The client accepted the hard block's cost without
-  /// knowing how often it would fire, and `PunchRefusal` is accumulating that figure right now while
-  /// punches are still being accepted. Shipping the inversion switched on would spend the only
-  /// moment at which their decision is cheap to reverse — so the code ships and the behaviour does
-  /// not, and the answer they give becomes a settings change rather than a release.
+  /// **Default true since 057 (2026-11-02).** It shipped false so the refusal log could measure how
+  /// often the block would fire before the client decided; they have now decided, and a punch that
+  /// fails either check is refused for every company. The column and every branch that reads it are
+  /// kept on purpose — the Settings toggle is only hidden — so one company can still be switched back
+  /// to "record as an exception" with an UPDATE and no deploy.
   ///
-  /// It also keeps the decision cheap in **both** directions afterwards. One company can be switched
-  /// on, watched for a fortnight against its own refusal log, and switched off again without a
-  /// deploy.
-  ///
-  /// What a flag cannot do is make the branch safe by never running. A dormant path is untested in
-  /// production until the day somebody turns it on, which is why every test of the refusal path runs
-  /// with enforcement forced on rather than inheriting this default — see `punch.service.spec.ts`.
-  /// The flag decides whose punches are refused, never whether the code is exercised.
-  punchBlockEnforced Boolean @default(false)
+  /// Every test of the refusal path forces enforcement on rather than inheriting this default — see
+  /// `punch.service.spec.ts` — so the flag decides whose punches are refused, never whether the code
+  /// is exercised.
+  punchBlockEnforced Boolean @default(true)
 
   /// The ceiling on **total** deductions from one payslip, as a percentage of its gross wages
   /// (020 FR-007a).
@@ -4111,6 +4124,9 @@ model PunchRecord {
   /// resolving an exception can see how near the miss was, and so the configured
   /// threshold can be retuned against real data instead of guesswork.
   faceMatchDistance Decimal?         @db.Decimal(6, 4)
+  /// The anti-spoof models' "real face" score, mean over the liveness frames (057) — kept for
+  /// calibrating the pass threshold against real devices; null before 057.
+  livenessScore     Decimal?         @db.Decimal(5, 4)
 
   latitude               Decimal?        @db.Decimal(10, 7)
   longitude              Decimal?        @db.Decimal(10, 7)
@@ -4653,17 +4669,19 @@ enum PunchRefusalReason {
   face_mismatch
   /// No face was detectable in the photo.
   no_face_detected
+  /// 057: the frames did not show a live person — the head did not turn as asked, the face changed
+  /// between frames, or the passive check scored it as a photo or a screen.
+  liveness_failed
 
   @@schema("hr")
 }
 
 /// A punch that was refused, or in Phase 2 would have been (020 FR-013c).
 ///
-/// **Deliberately no photo column** (plan D20, research §4). A face-mismatch refusal means the
-/// system could not establish whose face it is — retaining an unattributed biometric against a named
-/// employee is worse than the exception record it replaces, and the photo would be evidence of
-/// nothing except that somebody stood in front of a camera. `faceMatchDistance` is kept, because a
-/// number is not a biometric.
+/// **Since 057 the attempt's photo is kept** (`photoRef`, 30 days), reversing plan D20, which kept
+/// none on the ground that an unattributed biometric was worse than no record. With refusal now the
+/// only outcome of a failed check, the photo is how an administrator sees who was in front of the
+/// camera; the retention sweep deletes it.
 ///
 /// This table is how a refused punch stays visible to somebody. Under FR-013a the day reads as no
 /// punch at all — which is the point — so without this the refusal would leave no trace anywhere and
@@ -4688,6 +4706,17 @@ model PunchRefusal {
 
   /// The face-match distance, when a comparison happened at all. A number, not a biometric.
   faceMatchDistance Decimal? @db.Decimal(6, 4)
+
+  /// The photo of the refused attempt (057), kept for review and deleted by the retention sweep
+  /// after `refusalPhotoRetentionDays`; null once deleted, or for a would-be refusal recorded while
+  /// the block was off (that punch keeps its own photo).
+  photoRef        String?
+  /// The anti-spoof models' "real face" score, mean over the liveness frames (057) — kept for
+  /// calibrating the pass threshold against real devices; null before 057.
+  livenessScore   Decimal? @db.Decimal(5, 4)
+  /// Which liveness check failed, for a `liveness_failed` refusal (057): `did_not_turn`,
+  /// `different_person`, `spoof` or `no_face`.
+  livenessFailure String?
 
   /// When the punch was taken, and when it reached the server — a refused offline punch may arrive
   /// long after the moment it describes.
@@ -8728,6 +8757,8 @@ enum LabourPunchRefusalReason {
   unlocatable
   face_mismatch
   no_face_detected
+  /// 057: see `PunchRefusalReason.liveness_failed`.
+  liveness_failed
 
   @@schema("labour")
 }
@@ -10403,6 +10434,9 @@ model LabourPunch {
 
   photoRef          String?
   faceMatchDistance Decimal? @db.Decimal(6, 4)
+  /// The anti-spoof models' "real face" score, mean over the liveness frames (057) — kept for
+  /// calibrating the pass threshold against real devices; null before 057.
+  livenessScore     Decimal? @db.Decimal(5, 4)
 
   latitude               Decimal? @db.Decimal(10, 7)
   longitude              Decimal? @db.Decimal(10, 7)
@@ -10481,6 +10515,16 @@ model LabourPunchRefusal {
   accuracyMetres    Decimal? @db.Decimal(8, 2)
   distanceMetres    Decimal? @db.Decimal(10, 2)
   faceMatchDistance Decimal? @db.Decimal(6, 4)
+
+  /// The photo of the refused attempt (057), kept for review and deleted by the retention sweep
+  /// after `refusalPhotoRetentionDays`; null once deleted.
+  photoRef        String?
+  /// The anti-spoof models' "real face" score, mean over the liveness frames (057) — kept for
+  /// calibrating the pass threshold against real devices; null before 057.
+  livenessScore   Decimal? @db.Decimal(5, 4)
+  /// Which liveness check failed, for a `liveness_failed` refusal (057): `did_not_turn`,
+  /// `different_person`, `spoof` or `no_face`.
+  livenessFailure String?
 
   createdAt DateTime @default(now())
 

@@ -8,9 +8,13 @@ import {
   Post,
   Req,
   UseGuards,
+  UploadedFiles,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiResponse,
   ApiTags,
@@ -27,6 +31,12 @@ import {
 } from './dto/re-enrolment.dto';
 import { FaceEnrolmentService } from './face-enrolment.service';
 import { SelfService } from '../../common/decorators/route-access.decorator';
+import {
+  framesFrom,
+  LivenessFramesInterceptor,
+  livenessMultipartBody,
+  UploadedFrame,
+} from '../../common/uploads/liveness-frames';
 
 /**
  * The caller's own face enrolment.
@@ -61,15 +71,34 @@ export class FaceEnrolmentController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Enrol from 3–5 photos with recorded consent' })
+  @UseInterceptors(LivenessFramesInterceptor())
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(
+    livenessMultipartBody(
+      {
+        challengeId: { type: 'string' },
+        consentMethod: { type: 'string' },
+        consentAcknowledged: { type: 'boolean' },
+      },
+      ['challengeId', 'consentMethod', 'consentAcknowledged'],
+    ),
+  )
+  @ApiOperation({
+    summary: 'Enrol from a liveness capture with recorded consent',
+    description:
+      'Multipart since 057: two frames facing the camera and two head turns, on a ' +
+      '`staff-enrolment` challenge. 422 `LIVENESS_FAILED` when the capture is not a live person.',
+  })
   async enrol(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Body() dto: EnrolFaceDto,
+    @UploadedFiles() files: UploadedFrame[],
   ): Promise<FaceEnrolmentStatusDto> {
     return this.faceEnrolment.enrol(
       callerFrom(user, request),
-      dto.photos,
+      dto.challengeId,
+      framesFrom(files),
       dto.consentMethod,
     );
   }
@@ -106,7 +135,22 @@ export class FaceEnrolmentController {
 
   @Post('re-enrolment-complete')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Replace the template using an approved unlock' })
+  @UseInterceptors(LivenessFramesInterceptor())
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(
+    livenessMultipartBody(
+      {
+        challengeId: { type: 'string' },
+        consentAcknowledged: { type: 'boolean' },
+      },
+      ['challengeId', 'consentAcknowledged'],
+    ),
+  )
+  @ApiOperation({
+    summary: 'Replace the template using an approved unlock',
+    description:
+      'Multipart since 057, with a liveness capture as for enrolment.',
+  })
   @ApiResponse({
     status: 403,
     description:
@@ -116,10 +160,12 @@ export class FaceEnrolmentController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Body() dto: CompleteReEnrolmentDto,
+    @UploadedFiles() files: UploadedFrame[],
   ): Promise<FaceEnrolmentStatusDto> {
     return this.faceEnrolment.completeReEnrolment(
       callerFrom(user, request),
-      dto.photos,
+      dto.challengeId,
+      framesFrom(files),
     );
   }
 }

@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BiometricsService } from './biometrics.service';
+import { LivenessController } from './liveness.controller';
+import { LivenessService } from './liveness.service';
 import { OnnxBiometricsService } from './onnx-biometrics.service';
 
 /**
@@ -12,7 +14,11 @@ import { OnnxBiometricsService } from './onnx-biometrics.service';
  * override is keyed on the token, not on the module that declares it.
  */
 @Module({
-  providers: [{ provide: BiometricsService, useClass: OnnxBiometricsService }],
-  exports: [BiometricsService],
+  controllers: [LivenessController],
+  providers: [
+    { provide: BiometricsService, useClass: OnnxBiometricsService },
+    LivenessService,
+  ],
+  exports: [BiometricsService, LivenessService],
 })
 export class BiometricsModule {}

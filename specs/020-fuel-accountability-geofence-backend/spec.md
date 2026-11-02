@@ -55,6 +55,22 @@ location or photo verification fails."* This reverses the answer FR-013 original
 - Q: What GPS accuracy is acceptable before a punch is treated as unlocatable? → A: **A Super Admin setting, not a fixed figure.** The threshold is a company-level configuration under `COMPANY_SETTINGS`, changeable without a deploy, because the right number differs between an open site and a basement slab and the people who know which is which are not the people who deploy. It defaults to **50 metres** — the figure feature 013 already uses for labour muster fixes — and the rule inside it is benefit of the doubt: a punch counts as inside when its distance is within the fence radius plus its own reported accuracy, and is refused as unlocatable when the reported accuracy exceeds the configured maximum. The default rule was chosen alongside the setting; the client chose configurability over the fixed number, not a different rule.
 - Q: What face-match confidence refuses a punch? → A: **Unchanged from feature 003.** The decision of this session changes the consequence of a mismatch, not the matching. The existing threshold is the documented default of the matching mechanism 003 selected, the figure its published accuracy numbers are quoted at, and it is already loosenable per deployment for sites with harsh outdoor lighting. Re-tuning it because the consequence hardened would change two variables at once and make a rise in refusals unattributable.
 
+### Session 2026-11-02 (feature 057)
+
+Raised by the client after the block had shipped behind `punchBlockEnforced` (default off): a punch
+failing either check was still being recorded as an exception, and the refusal message did not say
+what had failed.
+
+- Q: Should the block now apply to every company? → A: **Yes — refuse, never record as an exception.** A migration sets `punchBlockEnforced` true for every company and makes true the default. The column, the service branches that read it and the Settings toggle's code are **kept**, with the toggle hidden, so a company can be switched back by an update and no release.
+- Q: What must a refusal tell the worker? → A: **What was measured, not only that it failed.** A location refusal quotes the distance from the site and the fence it was judged against; an unlocatable refusal quotes the phone's reported accuracy and the company's threshold and tells the worker to switch Location (GPS) on; a face refusal says whether no face was seen or the face did not match. The figures also travel in the 422 body as `detail`, so a client renders them in its own words (FR-013b).
+- Q: The phone will not give a location at all (permission refused, GPS off). What then? → A: **The app explains how to fix it on that device** — separate steps for an installed Android app, Android Chrome, iPhone (home-screen app and Safari) and desktop, and for location switched off — and asks for camera and location once, on first open, for anyone who marks attendance. A web app cannot open phone settings or pre-declare permissions; asking on a tap and explaining a refusal is the whole of what is available, and iOS may still ask again in later sessions.
+- Q: Is the photo of a refused attempt kept? → A: **Yes, for 30 days, then deleted** — reversing plan D20, which kept none. With refusal now the only outcome of a failed check, the photo is the one way an administrator can see who was in front of the camera. It is stored with the refusal row, never as attendance, and served only to callers who can read the refusal log (FR-013c).
+- Q: What can a reviewer see? → A: **The evidence, not only the verdict.** The refusal log and the older exception queue both show where the attempt was made (a map link), how far from the site, and the photo while it is held. Previously the exception queue said only that the face or the fence had failed.
+- Q: A photo of an employee held up to the webcam was accepted as their punch. How is a live person told apart from a picture? → A: **Every face capture follows a liveness challenge** (057). The server issues a one-time challenge (two minutes, single use, bound to the caller and — for a labour punch — the labour) naming the frames to capture: facing the camera, then the head turned to each side in a random order. The server checks that the head actually turned the way asked (a flat picture cannot move its nose off the line between the eyes, however it is tilted), that every frame shows the same person, and that a passive anti-spoof model (MiniFASNet, Apache-2.0) does not score the frames as a print or a screen. A failure is refused as `liveness_failed` saying which check failed. Measured on 2026-11-02 against a still photo of an enrolled face: the face matched (distance 0.08) and the passive model scored it live (0.99) — the head-turn check is what refused it, which is why both checks exist. The passive threshold is configurable and is to be calibrated on site devices; every punch records its score.
+- Q: Does the phone check the face before uploading? → A: **Yes, as guidance only** (057, option 6). MediaPipe's face detector (Apache-2.0, self-hosted, ~5 MB compressed, cached by the service worker after the first download) runs on the camera preview: the straight frame is taken once a face is settled in the oval, each turn frame the moment the head has turned far enough the asked way, with live hints. No face in the oval is told on the phone and nothing is uploaded; a head that never turns is uploaded after a timeout so the server refuses it and logs the attempt with its photo. A phone without WebGL falls back to a countdown. Every decision stays the server's.
+- Q: How long are attendance photos kept? → A: **An accepted punch's photo 14 days; a refused attempt's 30 days**, then deleted by a nightly sweep. The punch row, its time and its location stay — only the picture goes. A punch whose exception is still pending keeps its photo until resolved. Enrolment photos are not covered. (A 15-day setting existed before this but nothing applied it; photos were in fact kept for ever.)
+- Q: Can the photos of accepted punches be seen? → A: **Yes, in the daily register** — an In photo and an Out photo column beside the times, for whoever can read the register (the same audience as the exception photos; the refusal log stays write-only because it also carries location). A punch whose photo is gone reads **NA**: older than the punch retention period — counted from the cutoff, not from when the nightly sweep runs — or entered by hand or imported. A day with no punch reads `—`.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - A thirsty machine costs its hirer money (Priority: P1)
@@ -240,7 +256,10 @@ attendance record created by either.
   refusals MUST therefore be correct by default, so that a reader added after this feature inherits the
   guarantee without being told about it.
 - **FR-013b**: System MUST return the failing check and its reason to the employee in the response to
-  the refused attempt.
+  the refused attempt, with the measured figures that justify it — distance and allowed fence for a
+  location refusal, reported accuracy and threshold for an unlocatable one — in a `detail` object and
+  in the message, and MUST word "no face seen" apart from "face did not match" (Clarifications,
+  2026-11-02).
 - **FR-012a**: System MUST treat a punch as inside its fence when the distance to the fence centre
   is within the fence radius plus the punch's own reported location accuracy, and MUST refuse the
   punch as unlocatable when that reported accuracy exceeds the configured maximum
@@ -254,7 +273,20 @@ attendance record created by either.
 - **FR-013c**: System MUST record the refusal for operational and security purposes — who attempted,
   when, where, and which check failed — separately from attendance, so that a pattern of refusals is
   reviewable without any of them being attendance. This is a log, not a reviewable item, and nothing
-  in it can be approved into a present day.
+  in it can be approved into a present day. Since 057 each refusal also keeps the attempt's photo for
+  the refusal retention period (30 days), shown to the log's readers with the location and distance
+  (Clarifications, 2026-11-02).
+- **FR-012d** (057): System MUST refuse a punch whose capture does not show a live person — the
+  head not turning as the server-issued challenge asked, a different face between frames, or the
+  passive anti-spoof score below the configured threshold — as `liveness_failed`, naming the failed
+  check in the refusal's `detail.liveness` and its message, and recording the score with every
+  accepted punch and refusal for calibration.
+- **FR-013e** (057): System MUST delete an accepted punch's photo after the punch photo retention
+  period (default 14 days, configurable by deployment) unless its exception is still pending, and a
+  refused attempt's photo after the refusal retention period (default 30 days), keeping every other
+  field of the row.
+- **FR-013f** (057): The daily register MUST offer each punch's photo while it is held, and MUST show
+  "NA" for a punch with no photo — past the punch retention period, entered by hand, or imported.
 - **FR-014**: System MUST support marking an employee as mobile, exempting them from location
   validation, and MUST make that exemption visible and attributable. The exemption MUST NOT extend to
   face validation: a mobile employee's punch MUST still be refused for a face mismatch under FR-013

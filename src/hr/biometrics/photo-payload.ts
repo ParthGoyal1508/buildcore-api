@@ -31,7 +31,7 @@ export function decodePhotoPayload(payload: string, label: string): Buffer {
 }
 
 /** Magic-number sniff for the formats a phone camera produces. */
-function looksLikeImage(bytes: Buffer): boolean {
+export function looksLikeImage(bytes: Buffer): boolean {
   if (bytes.length < 12) {
     return false;
   }

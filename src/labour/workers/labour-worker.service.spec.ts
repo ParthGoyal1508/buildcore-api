@@ -36,6 +36,7 @@ describe('LabourWorkerService.findAll nocStatus (042)', () => {
       {} as never, // images
       supervisorSites as never,
       nocs as never,
+      {} as never, // liveness
     );
     const caller = { id: 'u1', companyId: 'c1', permissions: [] } as never;
     return { service, prisma, nocs, caller };
@@ -156,6 +157,7 @@ describe('LabourWorkerService edit and transfer (052)', () => {
       {} as never,
       supervisorSites as never,
       {} as never,
+      {} as never, // liveness
     );
     const caller = {
       id: 'u1',

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import {
   ConsentMethod,
@@ -42,13 +43,18 @@ class FakeBiometrics extends BiometricsService {
     const distance = euclideanDistance(a, b);
     return { matched: distance <= 0.6, distance };
   }
+  async analyse() {
+    return null;
+  }
 }
 
 /** A 1x1 JPEG — enough to pass the magic-number check in decodePhotoPayload. */
 const JPEG_BASE64 =
   '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
 
-const photos = (n: number) => Array.from({ length: n }, () => JPEG_BASE64);
+/** A liveness capture (057): what the frames show is the liveness double's say. */
+const frames = (n: number) =>
+  Array.from({ length: n }, () => Buffer.from(JPEG_BASE64, 'base64'));
 
 describe('FaceEnrolmentService', () => {
   const employee = { id: 'emp-1', companyId: 'co-1', siteId: 's-1' };
@@ -68,6 +74,8 @@ describe('FaceEnrolmentService', () => {
     delete: jest.Mock;
   };
   let auditLog: { record: jest.Mock };
+  /** 057: passes by default; a case that wants a failed capture rejects it once. */
+  let liveness: { assertLive: jest.Mock };
 
   const build = (
     existingEnrolment: unknown = null,
@@ -81,6 +89,7 @@ describe('FaceEnrolmentService', () => {
       delete: jest.fn(),
     };
     auditLog = { record: jest.fn().mockResolvedValue(undefined) };
+    liveness = { assertLive: jest.fn().mockResolvedValue(undefined) };
 
     const prisma = createPrismaMock({
       faceEnrolment: {
@@ -131,6 +140,7 @@ describe('FaceEnrolmentService', () => {
       images as never,
       storage as never,
       auditLog as never,
+      liveness as never,
       configService as never,
     );
     return { service, prisma };
@@ -141,7 +151,8 @@ describe('FaceEnrolmentService', () => {
       const { service } = build();
       const result = await service.enrol(
         caller,
-        photos(3),
+        'challenge-1',
+        frames(3),
         ConsentMethod.digital,
       );
 
@@ -151,18 +162,32 @@ describe('FaceEnrolmentService', () => {
       expect(storage.put).toHaveBeenCalledTimes(3);
     });
 
-    it('rejects fewer photos than the configured minimum', async () => {
+    it('enrols nobody from a capture that is not a live person (057)', async () => {
+      // A template made from a photo would let that photo punch.
       const { service } = build();
+      liveness.assertLive.mockRejectedValueOnce(
+        new UnprocessableEntityException({ code: 'LIVENESS_FAILED' }),
+      );
       await expect(
-        service.enrol(caller, photos(2), ConsentMethod.digital),
-      ).rejects.toBeInstanceOf(BadRequestException);
+        service.enrol(caller, 'challenge-1', frames(4), ConsentMethod.digital),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(storage.put).not.toHaveBeenCalled();
     });
 
-    it('rejects more photos than the configured maximum', async () => {
+    it('spends the staff-enrolment challenge as the caller', async () => {
       const { service } = build();
-      await expect(
-        service.enrol(caller, photos(6), ConsentMethod.digital),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      await service.enrol(
+        caller,
+        'challenge-1',
+        frames(4),
+        ConsentMethod.digital,
+      );
+      expect(liveness.assertLive).toHaveBeenCalledWith(
+        'challenge-1',
+        'user-1:staff-enrolment:',
+        expect.any(Array),
+        { subject: 'your', noFaceCode: 'FACE_NOT_DETECTED' },
+      );
     });
 
     it('rejects an already-enrolled employee with 409', async () => {
@@ -173,7 +198,7 @@ describe('FaceEnrolmentService', () => {
         photoRefs: ['old-ref'],
       });
       await expect(
-        service.enrol(caller, photos(3), ConsentMethod.digital),
+        service.enrol(caller, 'challenge-1', frames(3), ConsentMethod.digital),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -181,25 +206,19 @@ describe('FaceEnrolmentService', () => {
       const { service } = build();
       biometrics.failWithNoFace = true;
       await expect(
-        service.enrol(caller, photos(3), ConsentMethod.digital),
+        service.enrol(caller, 'challenge-1', frames(3), ConsentMethod.digital),
       ).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it('rejects a payload that is not an image', async () => {
-      const { service } = build();
-      await expect(
-        service.enrol(
-          caller,
-          ['bm90IGFuIGltYWdl', 'bm90IGFuIGltYWdl', 'bm90IGFuIGltYWdl'],
-          ConsentMethod.digital,
-        ),
-      ).rejects.toThrow(/not a recognised image/);
     });
 
     it('never writes the descriptor or photo refs into the audit log', async () => {
       // An audit trail of biometric access must not become a second copy of it.
       const { service } = build();
-      await service.enrol(caller, photos(3), ConsentMethod.digital);
+      await service.enrol(
+        caller,
+        'challenge-1',
+        frames(3),
+        ConsentMethod.digital,
+      );
 
       const changes = auditLog.record.mock.calls[0][0].changes;
       expect(changes).toEqual({
@@ -281,7 +300,11 @@ describe('FaceEnrolmentService', () => {
         enrolledAt: new Date(),
       });
 
-      const result = await service.completeReEnrolment(caller, photos(3));
+      const result = await service.completeReEnrolment(
+        caller,
+        'challenge-1',
+        frames(3),
+      );
       expect(result.status).toBe(FaceEnrolmentStatus.enrolled);
     });
 
@@ -295,7 +318,7 @@ describe('FaceEnrolmentService', () => {
         enrolledAt: new Date(),
       });
 
-      await service.completeReEnrolment(caller, photos(3));
+      await service.completeReEnrolment(caller, 'challenge-1', frames(3));
       expect(prisma.tx.reEnrolmentRequest.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'req-1' },
@@ -314,14 +337,14 @@ describe('FaceEnrolmentService', () => {
         enrolledAt: new Date(),
       });
 
-      await service.completeReEnrolment(caller, photos(3));
+      await service.completeReEnrolment(caller, 'challenge-1', frames(3));
       expect(storage.deleteMany).toHaveBeenCalledWith(['old-a']);
     });
 
     it('rejects a capture with no unlock at all', async () => {
       const { service } = build(enrolled, noActiveUnlock);
       await expect(
-        service.completeReEnrolment(caller, photos(3)),
+        service.completeReEnrolment(caller, 'challenge-1', frames(3)),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
@@ -330,7 +353,7 @@ describe('FaceEnrolmentService', () => {
       // than re-implementing the check in the test.
       const { service, prisma } = build(enrolled, noActiveUnlock);
       await expect(
-        service.completeReEnrolment(caller, photos(3)),
+        service.completeReEnrolment(caller, 'challenge-1', frames(3)),
       ).rejects.toBeInstanceOf(ForbiddenException);
 
       const where = (prisma.tx.reEnrolmentRequest.findFirst as jest.Mock).mock
@@ -344,18 +367,25 @@ describe('FaceEnrolmentService', () => {
     it('never touches the stored template when the unlock check fails', async () => {
       const { service, prisma } = build(enrolled, noActiveUnlock);
       await expect(
-        service.completeReEnrolment(caller, photos(3)),
+        service.completeReEnrolment(caller, 'challenge-1', frames(3)),
       ).rejects.toBeInstanceOf(ForbiddenException);
 
       expect(prisma.tx.faceEnrolment.update).not.toHaveBeenCalled();
       expect(storage.deleteMany).not.toHaveBeenCalled();
     });
 
-    it('enforces the photo bounds before looking for an unlock', async () => {
-      const { service } = build(enrolled, activeUnlock);
+    it('keeps the old template when the new capture is not a live person (057)', async () => {
+      // The frame count and the liveness checks both live in the capture now; whatever it refuses,
+      // nothing is stored and the template in force stays.
+      const { service, prisma } = build(enrolled, activeUnlock);
+      liveness.assertLive.mockRejectedValueOnce(
+        new BadRequestException({ code: 'LIVENESS_FRAMES_MISMATCH' }),
+      );
       await expect(
-        service.completeReEnrolment(caller, photos(2)),
+        service.completeReEnrolment(caller, 'challenge-1', frames(2)),
       ).rejects.toBeInstanceOf(BadRequestException);
+      expect(storage.put).not.toHaveBeenCalled();
+      expect(prisma.tx.faceEnrolment.update).not.toHaveBeenCalled();
     });
   });
 });

@@ -19,6 +19,11 @@ them from scratch."
 
 ## Clarifications
 
+### Session 2026-11-02 (feature 057)
+
+- Q: A photo of an employee held up to the webcam was accepted as their punch. How is a live person told apart from a picture? → A: **Every face capture follows a liveness challenge** (057). The server issues a one-time challenge (two minutes, single use, bound to the caller and — for a labour punch — the labour) naming the frames to capture: facing the camera, then the head turned to each side in a random order. The server checks that the head actually turned the way asked (a flat picture cannot move its nose off the line between the eyes, however it is tilted), that every frame shows the same person, and that a passive anti-spoof model (MiniFASNet, Apache-2.0) does not score the frames as a print or a screen. A failure is refused as `liveness_failed` saying which check failed. Measured on 2026-11-02 against a still photo of an enrolled face: the face matched (distance 0.08) and the passive model scored it live (0.99) — the head-turn check is what refused it, which is why both checks exist. The passive threshold is configurable and is to be calibrated on site devices; every punch records its score.
+- Q: Does enrolment change? → A: **Yes — one guided capture replaces the 3–5 photos**: two frames facing the camera, then a slight head turn to each side, on a liveness challenge. A capture that is not a live person enrols nobody (422 `LIVENESS_FAILED`), because a template made from a photo would let that photo punch. The template is the average of all four frames, so it holds the slight angles a punch is taken at. Existing enrolments stay valid — same model, same template — and nobody is asked to re-enrol. The photos travel as `multipart/form-data` (`frames`) rather than base64 JSON.
+
 ### Session 2026-09-01
 
 - Q: When a punch queued offline finally syncs, and its capture day already has a punch of that
@@ -365,9 +370,10 @@ with one, then confirming it appears correctly in the employee's own claim histo
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST accept a face-enrolment submission (3–5 photos, a consent method, and
-  a checked consent acknowledgement) only when the employee has no active enrolment, rejecting
-  submissions with fewer than 3 photos or an unchecked acknowledgement before deriving anything.
+- **FR-001**: The system MUST accept a face-enrolment submission (a liveness capture — two frames
+  facing the camera and two head turns on a server-issued challenge (057) — a consent method, and
+  a checked consent acknowledgement) only when the employee has no active enrolment, rejecting a
+  capture that does not show a live person or an unchecked acknowledgement before storing anything.
 - **FR-002**: On a valid enrolment submission, the system MUST derive a face template from the
   submitted photos using an in-process, npm-library-based face-recognition computation (not an
   external cloud call), store the template and consent record, and mark the employee "Enrolled"
@@ -433,7 +439,7 @@ with one, then confirming it appears correctly in the employee's own claim histo
   (mandatory remarks) a pending re-enrolment request; approval MUST grant a one-time-use unlock
   expiring 7 days after issuance if unused, and rejection MUST close the request with no unlock and
   notify the employee.
-- **FR-016**: On a completed re-enrolment (valid unlock present, 3–5 fresh photos, re-acknowledged
+- **FR-016**: On a completed re-enrolment (valid unlock present, a fresh liveness capture, re-acknowledged
   consent), the system MUST securely delete the previous face template, store the new one, and
   consume the unlock so it cannot be reused.
 - **FR-017**: The system MUST automatically close any pending re-enrolment request and revert

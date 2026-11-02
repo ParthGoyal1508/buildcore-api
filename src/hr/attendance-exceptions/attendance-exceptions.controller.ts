@@ -5,11 +5,12 @@ import {
   Param,
   Post,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
@@ -43,6 +44,25 @@ export class AttendanceExceptionsController {
     @Req() request: Request,
   ) {
     return this.exceptions.listPending(callerFrom(user, request), user);
+  }
+
+  @Get(':punchId/photo')
+  @ApiOperation({
+    summary: 'The photo a flagged punch was taken with (JPEG, 057)',
+  })
+  async photo(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('punchId') punchId: string,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.exceptions.photo(
+      callerFrom(user, request),
+      punchId,
+    );
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buffer);
   }
 
   /**

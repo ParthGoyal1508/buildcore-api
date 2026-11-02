@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, PunchRefusalReason, PunchType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
+import { sweepPhotos } from '../../common/storage/photo-retention';
+import { StorageService } from '../../common/storage/storage.service';
 
 export interface PunchRefusalInput {
   companyId: string;
@@ -15,6 +17,11 @@ export interface PunchRefusalInput {
   accuracyMeters?: number | null;
   faceMatchDistance?: number | null;
   capturedAt: Date;
+  /** The refused attempt's stored photo (057); null for a would-be refusal or a failed upload. */
+  photoRef?: string | null;
+  /** The capture's mean anti-spoof score, and which liveness check failed (057). */
+  livenessScore?: number | null;
+  livenessFailure?: string | null;
 }
 
 /**
@@ -28,10 +35,10 @@ export interface PunchRefusalInput {
 /**
  * What a refusal looks like to a reader of the log.
  *
- * `faceMatchDistance` is included and the photo is not — there is no photo. A refused punch stores
- * no image, because the blob would outlive the only row that ever referred to it. The distance is a
- * number derived from a comparison, not a biometric, and it is the one piece of evidence that
- * distinguishes "the camera saw somebody else" from "the light was bad".
+ * `faceMatchDistance` is the one number that distinguishes "the camera saw somebody else" from "the
+ * light was bad". Since 057 a refused attempt also keeps its photo for a limited time; the row says
+ * only **whether** one is held (`hasPhoto`), never the storage key — the image is served by
+ * `photo()` to an administrator, and the employee's own list does not offer it at all.
  */
 const REFUSAL_ROW_SELECT = {
   id: true,
@@ -45,6 +52,9 @@ const REFUSAL_ROW_SELECT = {
   faceMatchDistance: true,
   capturedAt: true,
   createdAt: true,
+  photoRef: true,
+  livenessScore: true,
+  livenessFailure: true,
 } as const;
 
 export type PunchRefusalRow = {
@@ -59,13 +69,31 @@ export type PunchRefusalRow = {
   faceMatchDistance: Prisma.Decimal | null;
   capturedAt: Date;
   createdAt: Date;
+  /** A photo of the attempt is still held (057) — false once the retention sweep deletes it. */
+  hasPhoto: boolean;
+  /** The capture's mean anti-spoof score (057), and for `liveness_failed` which check failed. */
+  livenessScore: Prisma.Decimal | null;
+  livenessFailure: string | null;
 };
+
+/** The storage key stays on the server; a reader learns only whether a photo exists. */
+function toRow({
+  photoRef,
+  ...row
+}: Omit<PunchRefusalRow, 'hasPhoto'> & {
+  photoRef: string | null;
+}): PunchRefusalRow {
+  return { ...row, hasPhoto: photoRef !== null };
+}
 
 @Injectable()
 export class PunchRefusalsService {
   private readonly logger = new Logger(PunchRefusalsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   /**
    * Writes one refusal.
@@ -92,10 +120,20 @@ export class PunchRefusalsService {
             accuracyMeters: input.accuracyMeters ?? null,
             faceMatchDistance: input.faceMatchDistance ?? null,
             capturedAt: input.capturedAt,
+            photoRef: input.photoRef ?? null,
+            livenessScore:
+              input.livenessScore == null
+                ? null
+                : input.livenessScore.toFixed(4),
+            livenessFailure: input.livenessFailure ?? null,
           },
         }),
       );
     } catch (error) {
+      // The photo was stored for this row alone; without the row nothing would ever delete it.
+      if (input.photoRef) {
+        await this.storage.delete(input.photoRef).catch(() => undefined);
+      }
       this.logger.error(
         `Could not record a punch refusal for employee ${input.employeeId}: ${
           error instanceof Error ? error.message : String(error)
@@ -122,7 +160,7 @@ export class PunchRefusalsService {
     employeeId: string,
     range?: { from?: Date; to?: Date },
   ): Promise<PunchRefusalRow[]> {
-    return withRlsContext(this.prisma, ctx, (tx) =>
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.punchRefusal.findMany({
         where: {
           employeeId,
@@ -139,6 +177,7 @@ export class PunchRefusalsService {
         select: REFUSAL_ROW_SELECT,
       }),
     );
+    return rows.map(toRow);
   }
 
   /**
@@ -158,7 +197,7 @@ export class PunchRefusalsService {
       reason?: PunchRefusalReason;
     } = {},
   ): Promise<PunchRefusalRow[]> {
-    return withRlsContext(this.prisma, ctx, (tx) =>
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.punchRefusal.findMany({
         where: {
           companyId,
@@ -177,6 +216,58 @@ export class PunchRefusalsService {
         select: REFUSAL_ROW_SELECT,
       }),
     );
+    return rows.map(toRow);
+  }
+
+  /**
+   * Deletes refused-attempt photos taken before `cutoff` (057 retention), oldest first, and returns
+   * how many went. Here rather than in the sweep because this table is read and written only from
+   * this service (FR-013d, `refusal-surface.spec.ts`): the sweep also clears attendance photos, and
+   * one file reaching into both is exactly what that guard exists to stop.
+   */
+  async deletePhotosBefore(cutoff: Date, logger: Logger): Promise<number> {
+    const superAdmin = { isSuperAdmin: true };
+    return sweepPhotos(
+      this.storage,
+      logger,
+      'Refused punch photos',
+      (take) =>
+        withRlsContext(this.prisma, superAdmin, (tx) =>
+          tx.punchRefusal.findMany({
+            where: { photoRef: { not: null }, capturedAt: { lt: cutoff } },
+            orderBy: { capturedAt: 'asc' },
+            take,
+            select: { id: true, photoRef: true },
+          }),
+        ) as Promise<{ id: string; photoRef: string }[]>,
+      async (rows) => {
+        await withRlsContext(this.prisma, superAdmin, (tx) =>
+          tx.punchRefusal.updateMany({
+            where: { id: { in: rows.map((r) => r.id) } },
+            data: { photoRef: null },
+          }),
+        );
+      },
+    );
+  }
+
+  /**
+   * The photo of one refused attempt (057), for whoever reads the company's log.
+   *
+   * Scoped by company as the list is, so a refusal id from another company is a 404 rather than a
+   * picture. 404 as well once the retention sweep has deleted it — the row stays, the face does not.
+   */
+  async photo(ctx: RlsContext, companyId: string, id: string): Promise<Buffer> {
+    const row = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.punchRefusal.findFirst({
+        where: { id, companyId },
+        select: { photoRef: true },
+      }),
+    );
+    if (!row?.photoRef) {
+      throw new NotFoundException('No photo is held for this refused attempt.');
+    }
+    return this.storage.get(row.photoRef);
   }
 
   /**

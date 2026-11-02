@@ -1,14 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { ConsentMethod } from '@prisma/client';
+import { Transform } from 'class-transformer';
 import {
-  ArrayMaxSize,
-  ArrayMinSize,
   Equals,
-  IsArray,
   IsEnum,
+  IsNotEmpty,
   IsString,
+  MaxLength,
 } from 'class-validator';
-import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * Photos arrive as base64 strings rather than multipart.
@@ -20,20 +19,14 @@ import { IsBase64Payload } from '../../../common/uploads/base64-payload';
  */
 export class EnrolFaceDto {
   @ApiProperty({
-    description: 'Base64-encoded JPEG/PNG photos (data-URL prefix optional).',
-    type: [String],
-    minItems: 3,
-    maxItems: 5,
+    description:
+      'The liveness challenge the capture followed (057, flow `staff-enrolment`). The photos are ' +
+      'the multipart `frames` in its step order: two facing the camera, then the two head turns.',
   })
-  @IsArray()
-  // Bounds are declared here as literals because Swagger and class-validator both
-  // need them at decoration time, before ConfigService exists. FaceEnrolmentService
-  // re-checks against the configured values, which stay the single source of truth.
-  @ArrayMinSize(3, { message: 'At least 3 photos are required to enrol.' })
-  @ArrayMaxSize(5, { message: 'At most 5 photos may be submitted.' })
-  @IsString({ each: true })
-  @IsBase64Payload({ each: true })
-  photos: string[];
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  challengeId: string;
 
   @ApiProperty({ enum: ConsentMethod })
   @IsEnum(ConsentMethod)
@@ -45,6 +38,8 @@ export class EnrolFaceDto {
   })
   // `Equals(true)` rather than `IsBoolean()`: the point is not that a boolean was
   // sent but that consent was actually given, so `false` must fail validation.
+  // Multipart sends text (057): "true" is consent, anything else is not.
+  @Transform(({ value }) => value === true || value === 'true')
   @Equals(true, {
     message: 'consentAcknowledged must be true to enrol biometric data.',
   })
