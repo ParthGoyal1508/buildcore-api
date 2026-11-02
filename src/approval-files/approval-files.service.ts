@@ -85,7 +85,7 @@ export class ApprovalFilesService {
     }
     if (entityType === ACTION_ATTENDANCE_EXCEPTION) {
       // A punch without a capture (an admin correction) must not offer a file that then 404s.
-      return (await this.punches.hasExceptionPhoto(ctx, entityId))
+      return (await this.punches.hasPunchPhoto(ctx, entityId))
         ? [{ key: PHOTO_KEY, name: 'Punch selfie', mimeType: 'image/jpeg' }]
         : [];
     }
@@ -122,7 +122,7 @@ export class ApprovalFilesService {
       return { data: bytes, filename, contentType: 'application/pdf' };
     }
     if (entityType === ACTION_ATTENDANCE_EXCEPTION && key === PHOTO_KEY) {
-      const data = await this.punches.exceptionPhoto(ctx, entityId);
+      const data = await this.punches.punchPhoto(ctx, entityId);
       if (!data) throw new NotFoundException('File not found');
       return describe(data, 'punch-selfie');
     }

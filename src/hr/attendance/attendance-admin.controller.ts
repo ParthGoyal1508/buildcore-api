@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   Post,
   Query,
@@ -34,6 +35,7 @@ import {
 } from './dto/mark-attendance.dto';
 import { RefusalsQueryDto } from './dto/refusals-query.dto';
 import { PunchRefusalsService } from '../punch/punch-refusals.service';
+import { PunchService } from '../punch/punch.service';
 import { resolveCompanyId } from '../../settings/company-scope';
 
 /** Admin attendance administration (005 US3). */
@@ -46,6 +48,7 @@ export class AttendanceAdminController {
   constructor(
     private readonly attendance: AttendanceAdminService,
     private readonly refusals: PunchRefusalsService,
+    private readonly punches: PunchService,
   ) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
@@ -266,6 +269,32 @@ export class AttendanceAdminController {
       this.companyOf(user, companyId),
       id,
     );
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buffer);
+  }
+
+  @Get('punches/:punchId/photo')
+  @ApiOperation({
+    summary:
+      'The photo a punch was taken with, for the daily register (JPEG, 057)',
+    description:
+      'Same audience as the register itself. Kept for the punch-photo retention period (14 days ' +
+      'by default) and 404 after the sweep deletes it, or for a punch entered by hand or ' +
+      'imported, which never had one; the punch itself is kept.',
+  })
+  async punchPhoto(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('punchId') punchId: string,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.punches.punchPhoto(
+      callerFrom(user, request).rls,
+      punchId,
+    );
+    if (!buffer)
+      throw new NotFoundException('No photo is held for this punch.');
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.send(buffer);

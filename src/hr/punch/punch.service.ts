@@ -818,24 +818,22 @@ export class PunchService {
   }
 
   /**
-   * The selfie behind a flagged punch, for whoever decides the exception (2026-10-20). Null for a
-   * punch with no capture. A face that did not match is the very thing being decided, and the
-   * approver had no way to look at it.
+   * The selfie a punch was taken with. Null for a punch with no capture, and once the retention
+   * sweep has deleted it. Read by whoever decides an exception (2026-10-20): a face that did not
+   * match is the very thing being decided, and the approver had no way to look at it. Since 057
+   * also by the daily register, for every punch.
    */
-  async exceptionPhoto(
-    ctx: RlsContext,
-    punchId: string,
-  ): Promise<Buffer | null> {
-    const ref = await this.exceptionPhotoRef(ctx, punchId);
+  async punchPhoto(ctx: RlsContext, punchId: string): Promise<Buffer | null> {
+    const ref = await this.punchPhotoRef(ctx, punchId);
     return ref ? this.storage.get(ref) : null;
   }
 
-  /** Whether `exceptionPhoto` has a selfie to give — without fetching it. */
-  async hasExceptionPhoto(ctx: RlsContext, punchId: string): Promise<boolean> {
-    return (await this.exceptionPhotoRef(ctx, punchId)) !== null;
+  /** Whether `punchPhoto` has a selfie to give — without fetching it. */
+  async hasPunchPhoto(ctx: RlsContext, punchId: string): Promise<boolean> {
+    return (await this.punchPhotoRef(ctx, punchId)) !== null;
   }
 
-  private async exceptionPhotoRef(
+  private async punchPhotoRef(
     ctx: RlsContext,
     punchId: string,
   ): Promise<string | null> {

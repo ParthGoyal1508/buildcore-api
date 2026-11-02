@@ -12,6 +12,7 @@ import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import {
   AuditAction,
   AuditEntityType,
+  ExceptionResolution,
   Prisma,
   PunchSource,
   PunchType,
@@ -36,7 +37,9 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import type {
   HrPayrollConfig,
   SettingsConfig,
+  WorkspaceConfig,
 } from '../../common/configs/config.interface';
+import { daysAgo } from '../../common/storage/photo-retention';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { PayrollScheduleService } from '../../payroll/runs/payroll-schedule.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
@@ -88,6 +91,16 @@ export interface DailyAttendanceRow {
   remarks: string | null;
   hasException: boolean;
   /**
+   * The punches behind In and Out, and whether each still has its photo (057). A punch has none
+   * when it was entered by hand or imported, and loses it after the retention period (14 days by
+   * default) — reported as gone from the cutoff, not from when the nightly sweep runs; the punch
+   * itself is kept. The photo comes from `GET /hr/attendance/punches/:id/photo`.
+   */
+  inPunchId: string | null;
+  inHasPhoto: boolean;
+  outPunchId: string | null;
+  outHasPhoto: boolean;
+  /**
    * A correction asked for on this employee-day and not yet applied (016 FR-012, web T050).
    *
    * **Why the list carries it at all.** Since corrections travel a chain, `POST /attendance`
@@ -120,6 +133,7 @@ export interface DailyAttendanceRow {
 export class AttendanceAdminService {
   private readonly timeZone: string;
   private readonly hrPayroll: HrPayrollConfig;
+  private readonly punchPhotoDays: number;
 
   private readonly logger = new Logger(AttendanceAdminService.name);
 
@@ -146,6 +160,8 @@ export class AttendanceAdminService {
   ) {
     this.timeZone = configService.get<SettingsConfig>('settings').timezone;
     this.hrPayroll = configService.get<HrPayrollConfig>('hrPayroll');
+    this.punchPhotoDays =
+      configService.get<WorkspaceConfig>('workspace').photoRetention.punchDays;
   }
 
   /**
@@ -355,6 +371,15 @@ export class AttendanceAdminService {
       viewer,
     );
 
+    // A photo past the retention period reads as gone even before the nightly sweep reaches it,
+    // so the register says the same thing on day 15 at 9 a.m. as at 4 a.m. The sweep's one
+    // exception is mirrored: a punch whose exception is still pending keeps its photo (057).
+    const photoCutoff = daysAgo(this.punchPhotoDays);
+    const hasPhoto = (p?: (typeof punches)[number]) =>
+      p?.photoRef != null &&
+      (p.capturedAt >= photoCutoff ||
+        p.exceptionResolution === ExceptionResolution.pending);
+
     return employees.map((e) => {
       const rows = byEmployee.get(e.id) ?? [];
       const inPunch = rows.find((r) => r.type === PunchType.in);
@@ -380,6 +405,10 @@ export class AttendanceAdminService {
             r.faceMatchResult === 'exception' ||
             r.geofenceResult === 'exception',
         ),
+        inPunchId: inPunch?.id ?? null,
+        inHasPhoto: hasPhoto(inPunch),
+        outPunchId: outPunch?.id ?? null,
+        outHasPhoto: hasPhoto(outPunch),
         pendingCorrection: pendingByEmployee.get(e.id) ?? null,
       };
     });
