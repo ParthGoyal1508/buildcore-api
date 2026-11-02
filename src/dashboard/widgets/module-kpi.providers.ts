@@ -10,7 +10,11 @@ import {
 import { RemindersService } from '../reminders/reminders.service';
 import type { DashboardContext } from '../context';
 import { once } from '../context';
-import type { WidgetListItem, WidgetProvider } from './widget.types';
+import type {
+  WidgetListItem,
+  WidgetProvider,
+  WidgetSection,
+} from './widget.types';
 
 /**
  * The dashboard cards whose modules have since been built (2026-10-12).
@@ -170,7 +174,8 @@ abstract class ProjectMoneyWidget implements WidgetProvider {
   protected abstract readonly figure: keyof ProjectMoneyPosition;
   readonly displayType = 'kpi' as const;
   readonly valueUnit = 'currency' as const;
-  readonly section = 'sidebar' as const;
+  // Contract values head the page; billed, received and held sit in the money panels (054).
+  readonly section: WidgetSection = 'money';
   readonly requires = [Permission.PROJECT_FINANCIALS, Permission.PROJECTS];
   constructor(protected readonly projects: ProjectsService) {}
   isAvailable(): boolean {
@@ -187,6 +192,7 @@ abstract class ProjectMoneyWidget implements WidgetProvider {
 /** Contract value of ongoing projects. Keeps the old card's id, so its link and place stay. */
 @Injectable()
 export class ContractValueWidget extends ProjectMoneyWidget {
+  readonly section: WidgetSection = 'sidebar';
   readonly id = 'contract-value';
   readonly title = 'Contract Value (Ongoing)';
   protected readonly figure = 'ongoingContractValue';
@@ -194,6 +200,7 @@ export class ContractValueWidget extends ProjectMoneyWidget {
 
 @Injectable()
 export class CompletedContractValueWidget extends ProjectMoneyWidget {
+  readonly section: WidgetSection = 'sidebar';
   readonly id = 'contract-value-completed';
   readonly title = 'Contract Value (Completed)';
   protected readonly figure = 'completedContractValue';
@@ -218,6 +225,14 @@ export class ReceivableAmountWidget extends ProjectMoneyWidget {
   readonly id = 'receivable-amount';
   readonly title = 'Yet to Receive';
   protected readonly figure = 'outstanding';
+}
+
+/** Retention and CPBG clients still hold back from the company (054, the Held panel). */
+@Injectable()
+export class HeldByClientsWidget extends ProjectMoneyWidget {
+  readonly id = 'held-by-clients';
+  readonly title = 'Held by Clients';
+  protected readonly figure = 'heldByClients';
 }
 
 /** Equipment on the register (spec FR-005). */

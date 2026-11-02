@@ -21,6 +21,7 @@ export class DashboardService {
     'sidebar',
     'alerts',
     'table',
+    'money',
   ]);
 
   constructor(

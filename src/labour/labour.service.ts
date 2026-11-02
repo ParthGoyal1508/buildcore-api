@@ -1,10 +1,21 @@
 import { Injectable, Optional } from '@nestjs/common';
-import { EngagementType, MusterStatus, Prisma } from '@prisma/client';
+import {
+  EngagementType,
+  PaymentSheetStatus,
+  MusterStatus,
+  PaymentSheetLineStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
-import { CashPolicyService } from '../common/cash/cash-policy';
+import { CashPolicyService, isCashHiddenTx } from '../common/cash/cash-policy';
+import {
+  cashCarrySources,
+  isCashLine,
+  isCashSheet,
+} from './cash/labour-cash-view';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { LabourRefsService } from './labour-refs.service';
 import { SiteWageRateService } from './site-rates/site-wage-rate.service';
@@ -171,5 +182,85 @@ export class LabourService {
       total: Math.round((direct + contractor) * 100) / 100,
       unapprovedMusterCount,
     };
+  }
+
+  /**
+   * Wages the company still owes its labour (054, the dashboard's Outgoing panel): the pending
+   * lines of every approved sheet — what each sheet's own `outstandingAmount` counts — plus the
+   * short-paid remainders of disbursed lines that no later approved sheet has carried yet. Draft
+   * sheets are still being prepared and are left out.
+   *
+   * With cash hidden (038) a direct sheet is all cash and leaves entirely; so does a line paid in
+   * cash, a carry-forward of a cash payment, and the remainder of a cash payment.
+   */
+  async wagesOwed(companyId: string): Promise<number> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      async (tx) => {
+        const hidden = await isCashHiddenTx(tx, companyId);
+        const liveSheet = {
+          companyId,
+          deletedAt: null,
+          status: { not: PaymentSheetStatus.draft },
+        };
+        const [pending, shortPaid] = await Promise.all([
+          tx.paymentSheetLine.findMany({
+            where: { status: PaymentSheetLineStatus.pending, sheet: liveSheet },
+            select: {
+              netPayable: true,
+              paymentMode: true,
+              carriedFromLineId: true,
+              sheet: { select: { engagementType: true } },
+            },
+          }),
+          tx.paymentSheetLine.findMany({
+            where: {
+              status: PaymentSheetLineStatus.disbursed,
+              carriedForwardBalance: { gt: 0 },
+              sheet: { companyId, deletedAt: null },
+            },
+            select: {
+              id: true,
+              carriedForwardBalance: true,
+              paymentMode: true,
+              sheet: { select: { engagementType: true } },
+            },
+          }),
+        ]);
+        const carried = shortPaid.length
+          ? await tx.paymentSheetLine.findMany({
+              where: {
+                carriedFromLineId: { in: shortPaid.map((l) => l.id) },
+                sheet: liveSheet,
+              },
+              select: { carriedFromLineId: true },
+            })
+          : [];
+        const taken = new Set(carried.map((c) => c.carriedFromLineId));
+        const cashSources = hidden
+          ? await cashCarrySources(tx, pending)
+          : new Set<string>();
+        const isHidden = (line: {
+          paymentMode: Parameters<typeof isCashLine>[0]['paymentMode'];
+          sheet: { engagementType: EngagementType };
+          carriedFromLineId?: string | null;
+        }) =>
+          hidden &&
+          (isCashSheet(line.sheet) ||
+            isCashLine(line) ||
+            (!!line.carriedFromLineId &&
+              cashSources.has(line.carriedFromLineId)));
+
+        const owed =
+          pending
+            .filter((l) => !isHidden(l))
+            .reduce((s, l) => s + l.netPayable.toNumber(), 0) +
+          shortPaid
+            .filter((l) => !taken.has(l.id) && !isHidden(l))
+            .reduce((s, l) => s + l.carriedForwardBalance.toNumber(), 0);
+        return Math.round(owed * 100) / 100;
+      },
+    );
   }
 }
