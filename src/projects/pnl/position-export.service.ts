@@ -11,6 +11,7 @@ import {
   renderReportPdf,
 } from '../../dashboard/reports/export/export-renderer';
 import type { ReportData } from '../../dashboard/reports/report.types';
+import { CompaniesService } from '../../settings/companies/companies.service';
 import { money } from '../billing/bill-totals';
 import { ProjectPnlService } from './project-pnl.service';
 
@@ -105,7 +106,22 @@ export class ProjectPositionExportService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pnl: ProjectPnlService,
+    private readonly companies: CompaniesService,
   ) {}
+
+  /** The company band at the head of the PDF (055). */
+  private async brand(companyId: string) {
+    const identity = await this.companies
+      .getDocumentIdentity(companyId)
+      .catch(() => null);
+    return identity
+      ? {
+          name: identity.name,
+          logo: identity.logo,
+          lines: identity.contactLines,
+        }
+      : undefined;
+  }
 
   async export(
     caller: AuthenticatedUser,
@@ -131,7 +147,11 @@ export class ProjectPositionExportService {
     );
     const buffer =
       format === 'pdf'
-        ? await renderReportPdf(documentTitle(view), report)
+        ? await renderReportPdf(
+            documentTitle(view),
+            report,
+            await this.brand(companyId),
+          )
         : await renderReportExcel(documentTitle(view), report);
 
     return {

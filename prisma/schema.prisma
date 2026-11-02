@@ -523,6 +523,9 @@ model Company {
   phone   String?
   email   String?
   website String?
+  /// The corporate office, where it differs from the registered office (055, 2026-11-02). Printed
+  /// under the registered office at the head of every generated PDF; blank prints nothing.
+  corporateAddress String?
 
   pfEstablishmentCode      String?
   esicCode                 String?

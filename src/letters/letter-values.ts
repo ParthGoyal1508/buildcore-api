@@ -57,35 +57,8 @@ export function indefiniteArticle(phrase: string): 'a' | 'an' {
   return /^[aeiou]/.test(lower) ? 'an' : 'a';
 }
 
-/**
- * The registered office on one line, its parts each once (2026-10-15).
- *
- * The company's `address` is often typed in full — "28A, Gandhi Nagar, …, Deoli, Tonk,
- * Rajasthan - 304804" — and the city, state and PIN code are held beside it as well. Joined
- * blindly, the F&F sheet's header read "…Rajasthan - 304804, Deoli, Rajasthan - 304804". A part
- * the address already contains is left out.
- */
-export function composeAddress(parts: {
-  address?: string | null;
-  city?: string | null;
-  state?: string | null;
-  pinCode?: string | null;
-}): string {
-  const address = parts.address?.trim() ?? '';
-  const has = (part: string) =>
-    new RegExp(`\\b${escapeRegExp(part)}\\b`, 'i').test(address);
-  const extra = [parts.city, parts.state]
-    .map((part) => part?.trim() ?? '')
-    .filter((part) => part && !has(part));
-  const place = [address, ...extra].filter(Boolean).join(', ');
-  const pin = parts.pinCode?.trim() ?? '';
-  if (!pin || has(pin)) return place;
-  return place ? `${place} - ${pin}` : pin;
-}
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+/** The registered office on one line, its parts each once — shared with every PDF since 055. */
+export { oneLineAddress as composeAddress } from '../common/document-header/company-header';
 
 /**
  * The tick boxes for one choice — "[X] Bank Transfer (NEFT)  [ ] Cheque  [ ] Cash" — from what was

@@ -84,7 +84,7 @@ export class EquipmentDocumentExpiryRule implements ReminderRuleProvider {
               name: true,
               registration: {
                 where: { status: 'held', expiresAt: { not: null } },
-                select: { kind: true },
+                select: { kind: true, expiresAt: true },
               },
             },
           },
@@ -134,11 +134,18 @@ export class EquipmentDocumentExpiryRule implements ReminderRuleProvider {
         // last month still needs chasing — more, not less.
         if (expiresAt > window) return [];
         // An insurance or fitness scan whose paper the register already dates is reminded about
-        // once, by the registration rule below — the same policy is not two reminders.
+        // once, by the registration rule below — the same policy is not two reminders. Only when
+        // the register's date is as late as the scan's (2026-11-02): a renewal uploaded before the
+        // register followed it is the one to chase, and the registration rule skips the old date.
         const paper = paperOfDocType(docType?.name ?? '');
         if (
           paper &&
-          document.equipment.registration.some((item) => item.kind === paper)
+          document.equipment.registration.some(
+            (item) =>
+              item.kind === paper &&
+              item.expiresAt !== null &&
+              item.expiresAt >= expiresAt,
+          )
         ) {
           return [];
         }
@@ -199,7 +206,45 @@ export class EquipmentRegistrationExpiryRule implements ReminderRuleProvider {
           },
         },
       });
-      return papers.map((paper) => {
+      // A paper renewed by uploading a later scan (2026-11-02): the scan is the current paper, and
+      // the document rule above chases it. The register's old date is history, not a reminder.
+      const scans = papers.length
+        ? await tx.equipmentDocument.findMany({
+            where: {
+              equipmentId: {
+                in: [...new Set(papers.map((p) => p.equipmentId))],
+              },
+              expiresAt: { not: null },
+            },
+            select: { equipmentId: true, docTypeId: true, expiresAt: true },
+          })
+        : [];
+      const scanTypes = scans.length
+        ? await tx.equipmentDocType.findMany({
+            where: { id: { in: [...new Set(scans.map((s) => s.docTypeId))] } },
+            select: { id: true, name: true },
+          })
+        : [];
+      const paperOfType = new Map(
+        scanTypes.map((t) => [t.id, paperOfDocType(t.name)]),
+      );
+      const latestScan = new Map<string, number>();
+      for (const scan of scans) {
+        const kind = paperOfType.get(scan.docTypeId);
+        if (!kind || !scan.expiresAt) continue;
+        const key = `${scan.equipmentId}:${kind}`;
+        latestScan.set(
+          key,
+          Math.max(latestScan.get(key) ?? 0, scan.expiresAt.getTime()),
+        );
+      }
+      return papers.flatMap((paper) => {
+        if (
+          (latestScan.get(`${paper.equipmentId}:${paper.kind}`) ?? 0) >
+          (paper.expiresAt as Date).getTime()
+        ) {
+          return [];
+        }
         const label =
           REGISTRATION_PAPERS.find((p) => p.kind === paper.kind)?.label ??
           paper.kind;

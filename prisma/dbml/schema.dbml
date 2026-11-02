@@ -264,6 +264,8 @@ order (2026-10-14) — the client\'s formats carry "Ph:", "Email:" and "Website:
 registered office. Optional: a document prints the lines that are filled.']
   email String
   website String
+  corporateAddress String [note: 'The corporate office, where it differs from the registered office (055, 2026-11-02). Printed
+under the registered office at the head of every generated PDF; blank prints nothing.']
   pfEstablishmentCode String
   esicCode String
   professionalTaxRegNumber String

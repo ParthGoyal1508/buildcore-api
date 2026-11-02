@@ -84,4 +84,4 @@ exports[`purchase order document (036 M9 format fence) prints under the same lay
 }
 `;
 
-exports[`purchase order document (036 M9 format fence) renders the same PDF 1`] = `"ad220b190b2cd02390ef9dab51bb2587b5b5354a65cbee8641708aa2a4170935"`;
+exports[`purchase order document (036 M9 format fence) renders the same PDF 1`] = `"55dcc386fdc5ad541ab065316d9a1e0461a8658ba8c1307a3762b287db9ee94a"`;

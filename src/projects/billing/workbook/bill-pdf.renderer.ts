@@ -10,6 +10,11 @@ import type {
   WorkbookMeasurementSheet,
 } from './bill-workbook.types';
 import { type DebitNoteView, drawDebitNotePdf } from './debit-note-document';
+import {
+  COMPACT_HEADER,
+  type CompanyHeader,
+  drawCompanyHeader,
+} from '../../../common/document-header/company-header';
 import { headerPairs } from './header-pairs';
 import { indianFigure, taxBasisLine } from './print-format';
 import { billSignatures } from './signature-block';
@@ -48,7 +53,8 @@ const A4_HEIGHT = 841.89;
 const MARGIN = 28;
 
 /** Font sizes, named because a bare `7` scattered through drawing calls says nothing. */
-const SIZE = { title: 12, heading: 9, body: 7.5, small: 6.5 } as const;
+// One step up across the board in 055, at the client's request (was 12, 9, 7.5, 6.5).
+const SIZE = { title: 13, heading: 10, body: 8, small: 7 } as const;
 
 type Align = 'left' | 'right' | 'center';
 
@@ -145,6 +151,7 @@ export class BillPdfRenderer {
       view.header.issuer.name,
       view.abstract.title ?? 'ABSTRACT SHEET',
       A4_WIDTH,
+      view.brand,
     );
     this.headerBlock(doc, ...headerPairs(view.header), A4_WIDTH);
 
@@ -284,7 +291,13 @@ export class BillPdfRenderer {
 
   private schedulePage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {
     this.page(doc, 'landscape');
-    this.title(doc, view.header.issuer.name, 'BOQ ANNEXURE-I', A4_HEIGHT);
+    this.title(
+      doc,
+      view.header.issuer.name,
+      'BOQ ANNEXURE-I',
+      A4_HEIGHT,
+      view.brand,
+    );
     this.headerBlock(doc, ...headerPairs(view.header), A4_HEIGHT);
 
     const width = A4_HEIGHT - MARGIN * 2;
@@ -341,7 +354,13 @@ export class BillPdfRenderer {
     sheet: WorkbookMeasurementSheet,
   ): void {
     this.page(doc, 'portrait');
-    this.title(doc, view.header.issuer.name, 'MEASUREMENT SHEET', A4_WIDTH);
+    this.title(
+      doc,
+      view.header.issuer.name,
+      'MEASUREMENT SHEET',
+      A4_WIDTH,
+      view.brand,
+    );
 
     const width = A4_WIDTH - MARGIN * 2;
     // The item is printed **inside** the sheet, which is what makes naming the sheets by position
@@ -436,7 +455,13 @@ export class BillPdfRenderer {
       return;
     }
     this.page(doc, 'portrait');
-    this.title(doc, view.header.issuer.name, 'DEBIT NOTE', A4_WIDTH);
+    this.title(
+      doc,
+      view.header.issuer.name,
+      'DEBIT NOTE',
+      A4_WIDTH,
+      view.brand,
+    );
     this.headerBlock(doc, ...headerPairs(view.header), A4_WIDTH);
     doc
       .moveDown(1)
@@ -468,15 +493,31 @@ export class BillPdfRenderer {
     issuerName: string | null,
     heading: string,
     pageWidth: number,
+    brand?: CompanyHeader,
   ): void {
     const width = pageWidth - MARGIN * 2;
-    doc.fontSize(SIZE.title).text(issuerName ?? '', MARGIN, MARGIN, {
-      width,
-      align: 'center',
-    });
+    // The company band above the format's own heading (055), compact: it repeats on every page.
+    const top = brand
+      ? drawCompanyHeader(doc, brand, {
+          x: MARGIN,
+          y: MARGIN,
+          width,
+          regular: 'Helvetica',
+          bold: 'Helvetica-Bold',
+          measures: COMPACT_HEADER,
+        }) - 4
+      : MARGIN;
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(SIZE.title)
+      .text(issuerName ?? '', MARGIN, top, {
+        width,
+        align: 'center',
+      });
     doc
       .fontSize(SIZE.heading)
-      .text(heading, { width, align: 'center' })
+      .text(heading, { width, align: 'center', underline: true })
+      .font('Helvetica')
       .moveDown(0.4);
   }
 

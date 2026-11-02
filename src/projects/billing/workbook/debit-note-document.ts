@@ -30,7 +30,13 @@ import { indianFigure } from './print-format';
  * its own and the "Debit Note" section of a bill package, which prints every note recovered on it.
  */
 export interface DebitNoteView {
-  company: { name: string; address: string | null; logo: Buffer | null };
+  company: {
+    name: string;
+    address: string | null;
+    logo: Buffer | null;
+    /** The offices, email and website under the name (055). */
+    lines?: string[];
+  };
   projectName: string;
   projectCode: string | null;
   location: string | null;
@@ -155,7 +161,7 @@ export function drawDebitNotePdf(
   ) => {
     doc
       .font(o.bold ? bold : regular)
-      .fontSize(o.size ?? 8)
+      .fontSize(o.size ?? 8.5)
       .fillColor(o.color ?? '#000')
       .text(text, x + 4, top, {
         width: w - 8,
@@ -164,7 +170,7 @@ export function drawDebitNotePdf(
       });
     doc.fillColor('#000');
   };
-  const height = (text: string, w: number, size = 8, isBold = false) =>
+  const height = (text: string, w: number, size = 8.5, isBold = false) =>
     doc
       .font(isBold ? bold : regular)
       .fontSize(size)
@@ -173,17 +179,34 @@ export function drawDebitNotePdf(
   doc.lineWidth(0.6);
 
   // ── Band: logo + party | company, project, location, title | note number ──
+  // 055: a bigger logo and name, and the company's offices, email and website under the name.
   const c1 = W * 0.36;
   const c2 = W * 0.38;
   const c3 = W - c1 - c2;
   const t = titleLines(view);
-  const bandH = 96;
+  const contact = view.company.lines ?? [];
+  const nameSize = 13;
+  const lineSize = 7;
+  const middleH =
+    8 +
+    height(t.company.toUpperCase(), c2, nameSize, true) +
+    2 +
+    contact.reduce((sum, line) => sum + height(line, c2, lineSize) + 1, 0) +
+    3 +
+    height(t.project, c2, 9, true) +
+    1 +
+    (t.location ? height(t.location, c2, 9, true) + 1 : 0) +
+    height(t.title, c2, 9, true) +
+    8;
+  const bandH = Math.max(110, middleH);
   box(x0, y, c1, bandH);
   box(x0 + c1, y, c2, bandH);
   box(x0 + c1 + c2, y, c3, bandH);
   if (view.company.logo) {
     try {
-      doc.image(view.company.logo, x0 + 6, y + 6, { fit: [c1 - 12, 44] });
+      doc.image(view.company.logo, x0 + 6, y + 6, {
+        fit: [c1 - 12, bandH - 46],
+      });
     } catch {
       // An image pdfkit cannot read leaves the box blank rather than failing the note.
     }
@@ -191,39 +214,48 @@ export function drawDebitNotePdf(
   write(
     `Party Name:- ${view.party.name ? `M/s ${view.party.name}` : ''}`,
     x0,
-    y + 56,
+    y + bandH - 34,
     c1,
-    { bold: true, size: 8.5 },
+    { bold: true, size: 9 },
   );
   let ty = y + 8;
-  write(t.company.toUpperCase(), x0 + c1, ty, c2, { bold: true, size: 11 });
-  ty += height(t.company.toUpperCase(), c2, 11, true) + 2;
+  write(t.company.toUpperCase(), x0 + c1, ty, c2, {
+    bold: true,
+    size: nameSize,
+    align: 'center',
+  });
+  ty += height(t.company.toUpperCase(), c2, nameSize, true) + 2;
+  for (const line of contact) {
+    write(line, x0 + c1, ty, c2, { size: lineSize, align: 'center' });
+    ty += height(line, c2, lineSize) + 1;
+  }
+  ty += 3;
   write(t.project, x0 + c1, ty, c2, {
     bold: true,
-    size: 8.5,
+    size: 9,
     align: 'center',
     color: RED,
   });
-  ty += height(t.project, c2, 8.5, true) + 1;
+  ty += height(t.project, c2, 9, true) + 1;
   if (t.location) {
     write(t.location, x0 + c1, ty, c2, {
       bold: true,
-      size: 8.5,
+      size: 9,
       align: 'center',
       color: RED,
     });
-    ty += height(t.location, c2, 8.5, true) + 1;
+    ty += height(t.location, c2, 9, true) + 1;
   }
   write(t.title, x0 + c1, ty, c2, {
     bold: true,
-    size: 8.5,
+    size: 9,
     align: 'center',
     underline: true,
   });
-  write('Debit Note No :', x0 + c1 + c2, y + 30, c3, { bold: true, size: 8.5 });
+  write('Debit Note No :', x0 + c1 + c2, y + 30, c3, { bold: true, size: 9 });
   write(view.noteNumber ?? '', x0 + c1 + c2, y + 46, c3, {
     bold: true,
-    size: 10,
+    size: 11,
   });
   y += bandH;
 

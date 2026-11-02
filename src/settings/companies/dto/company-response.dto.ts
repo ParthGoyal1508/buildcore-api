@@ -20,6 +20,7 @@ export class CompanyResponseDto {
   @ApiPropertyOptional() phone: string | null;
   @ApiPropertyOptional() email: string | null;
   @ApiPropertyOptional() website: string | null;
+  @ApiPropertyOptional() corporateAddress: string | null;
   @ApiPropertyOptional() pfEstablishmentCode: string | null;
   @ApiPropertyOptional() esicCode: string | null;
   @ApiPropertyOptional() professionalTaxRegNumber: string | null;
