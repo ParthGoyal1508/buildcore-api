@@ -1,12 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
-/** The four captures that need a live face (057). */
+/** The captures that need a live face (057): attendance, and App Settings face unlock (054). */
 export const LIVENESS_FLOWS = [
   'staff-punch',
   'labour-punch',
   'staff-enrolment',
   'labour-enrolment',
+  'unlock-enrolment',
+  'unlock-confirm',
 ] as const;
 export type LivenessFlow = (typeof LIVENESS_FLOWS)[number];
 
