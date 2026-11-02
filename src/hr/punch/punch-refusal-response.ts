@@ -1,6 +1,11 @@
 import { UnprocessableEntityException } from '@nestjs/common';
 import { PunchRefusalReason } from '@prisma/client';
 
+import {
+  livenessMessage,
+  LivenessFailure,
+} from '../biometrics/liveness.service';
+
 /**
  * The stable code a refused punch returns (020 FR-013, plan D18).
  *
@@ -22,6 +27,8 @@ export const PUNCH_REFUSAL_CODES = {
   // the worker reads which one happened and the log keeps them apart.
   [PunchRefusalReason.face_mismatch]: 'PUNCH_REFUSED_FACE',
   [PunchRefusalReason.no_face_detected]: 'PUNCH_REFUSED_FACE',
+  // 057. Its own code: the action differs — turn the head as asked, or stop holding up a picture.
+  [PunchRefusalReason.liveness_failed]: 'PUNCH_REFUSED_LIVENESS',
 } as const satisfies Record<PunchRefusalReason, string>;
 
 /**
@@ -41,6 +48,8 @@ export interface PunchRefusalDetail {
   accuracyMeters?: number;
   /** The company's accuracy threshold — a fix vaguer than this cannot be located. */
   accuracyMaxMeters?: number;
+  /** For a liveness refusal (057): which check failed, and on which frame. */
+  liveness?: LivenessFailure;
 }
 
 /** "850 m" under a kilometre (rounded to 10 m — finer is false precision for GPS), "2.4 km" above. */
@@ -110,6 +119,8 @@ const PUNCH_REFUSAL_MESSAGES = {
   [PunchRefusalReason.no_face_detected]: () =>
     'No face could be seen in this photo, so the punch was not recorded. Retake it in good light ' +
     'with your face filling the frame.',
+  [PunchRefusalReason.liveness_failed]: (d: PunchRefusalDetail) =>
+    livenessMessage(d.liveness, 'your'),
 } as const satisfies Record<
   PunchRefusalReason,
   (detail: PunchRefusalDetail) => string

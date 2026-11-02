@@ -646,6 +646,19 @@ export interface WorkspaceConfig {
    * `punchDays` replaces `punchPhotoDays`, which was declared (default 15) and read by nothing — no
    * sweep existed, so photos were in fact kept for ever. `PunchPhotoRetentionCron` is the sweep.
    */
+  /**
+   * Liveness (057): what a capture must show to count as a live person in front of the camera.
+   * Both thresholds are tunables precisely because they were set before measuring real devices on
+   * site — every accepted punch and refusal records its score so they can be calibrated.
+   */
+  liveness: {
+    /** How long an issued challenge may be presented, in seconds. */
+    challengeTtlSeconds: number;
+    /** The least change in `yaw` (see `FaceAnalysis.yaw`) that counts as having turned. */
+    minTurn: number;
+    /** The least mean anti-spoof "real face" score that counts as a live face (0–1). */
+    minRealScore: number;
+  };
   photoRetention: {
     /** An accepted punch's photo (staff and labour), from the punch's own time. */
     punchDays: number;

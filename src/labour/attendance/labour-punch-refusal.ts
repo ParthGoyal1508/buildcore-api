@@ -1,5 +1,6 @@
 import { UnprocessableEntityException } from '@nestjs/common';
 import { LabourPunchRefusalReason } from '@prisma/client';
+import { livenessMessage } from '../../hr/biometrics/liveness.service';
 import {
   outsideFenceMessage,
   PunchRefusalDetail,
@@ -16,6 +17,7 @@ export const LABOUR_PUNCH_REFUSAL_CODES = {
   [LabourPunchRefusalReason.unlocatable]: 'LABOUR_PUNCH_REFUSED_UNLOCATABLE',
   [LabourPunchRefusalReason.face_mismatch]: 'LABOUR_PUNCH_REFUSED_FACE',
   [LabourPunchRefusalReason.no_face_detected]: 'LABOUR_PUNCH_REFUSED_FACE',
+  [LabourPunchRefusalReason.liveness_failed]: 'LABOUR_PUNCH_REFUSED_LIVENESS',
 } as const satisfies Record<LabourPunchRefusalReason, string>;
 
 /**
@@ -30,6 +32,8 @@ const MESSAGES = {
     'This photo does not match the face registered for this labour, so attendance was not marked. Check you picked the right person, then retake the photo in good light, facing the camera.',
   [LabourPunchRefusalReason.no_face_detected]: () =>
     'No face could be seen in this photo, so attendance was not marked. Retake it in good light with the face filling the frame.',
+  [LabourPunchRefusalReason.liveness_failed]: (d: PunchRefusalDetail) =>
+    livenessMessage(d.liveness, "the labour's"),
 } as const satisfies Record<
   LabourPunchRefusalReason,
   (detail: PunchRefusalDetail) => string

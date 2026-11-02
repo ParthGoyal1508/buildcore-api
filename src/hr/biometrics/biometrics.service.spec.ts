@@ -14,6 +14,14 @@ class TestBiometrics extends BiometricsService {
     const distance = euclideanDistance(a, b);
     return { matched: distance <= 0.6, distance };
   }
+  // 057: liveness is not what these cases exercise; every frame reads as a live, frontal face.
+  async analyse() {
+    return {
+      descriptor: Float32Array.from({ length: 128 }, () => 0.5),
+      yaw: 0,
+      realScore: 1,
+    };
+  }
 }
 
 describe('euclideanDistance', () => {

@@ -8,6 +8,7 @@ import { WorkspaceConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { daysAgo, sweepPhotos } from '../../common/storage/photo-retention';
 import { StorageService } from '../../common/storage/storage.service';
+import { PunchRefusalsService } from './punch-refusals.service';
 
 /**
  * Deletes staff attendance photos past their retention (057, client decision 2026-11-02).
@@ -28,6 +29,7 @@ export class PunchPhotoRetentionCron {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly config: ConfigService,
+    private readonly refusals: PunchRefusalsService,
   ) {}
 
   @Cron('30 3 * * *', {
@@ -71,30 +73,11 @@ export class PunchPhotoRetentionCron {
       },
     );
 
-    const refusals = await sweepPhotos(
-      this.storage,
+    // The refusal table belongs to `PunchRefusalsService` alone (FR-013d), so its photos are
+    // deleted there rather than queried from here.
+    const refusals = await this.refusals.deletePhotosBefore(
+      refusalCutoff,
       this.logger,
-      'Refused punch photos',
-      (take) =>
-        withRlsContext(this.prisma, superAdmin, (tx) =>
-          tx.punchRefusal.findMany({
-            where: {
-              photoRef: { not: null },
-              capturedAt: { lt: refusalCutoff },
-            },
-            orderBy: { capturedAt: 'asc' },
-            take,
-            select: { id: true, photoRef: true },
-          }),
-        ) as Promise<{ id: string; photoRef: string }[]>,
-      async (rows) => {
-        await withRlsContext(this.prisma, superAdmin, (tx) =>
-          tx.punchRefusal.updateMany({
-            where: { id: { in: rows.map((r) => r.id) } },
-            data: { photoRef: null },
-          }),
-        );
-      },
     );
 
     return { punches, refusals };

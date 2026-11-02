@@ -8,8 +8,16 @@ import {
   Post,
   Query,
   UseGuards,
+  UploadedFiles,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -17,6 +25,12 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import {
+  framesFrom,
+  LivenessFramesInterceptor,
+  livenessMultipartBody,
+  UploadedFrame,
+} from '../../common/uploads/liveness-frames';
 import {
   ContractorOptionsDto,
   CreateWorkerDto,
@@ -70,18 +84,28 @@ export class LabourWorkerController {
   }
 
   @Post()
+  @UseInterceptors(LivenessFramesInterceptor())
+  @ApiConsumes('multipart/form-data')
   @ApiOperation({
     summary: 'Register a labour worker',
     description:
-      'Contractor engagement requires a resolvable active contractor (FR-008); a ' +
-      'duplicate active Aadhaar is rejected with 409 (FR-010).',
+      'Multipart since 057: the registration fields, and optionally the face as `frames` with ' +
+      'the `challengeId` of a `labour-enrolment` liveness challenge (422 `LIVENESS_FAILED` when ' +
+      'the capture is not a live person). Contractor engagement requires a resolvable active ' +
+      'contractor (FR-008); a duplicate active Aadhaar is rejected with 409 (FR-010).',
   })
   async create(
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: CreateWorkerDto,
+    @UploadedFiles() files: UploadedFrame[] | undefined,
     @Ip() ip: string,
   ) {
-    return this.workers.create(caller, dto, ip);
+    return this.workers.create(
+      caller,
+      dto,
+      ip,
+      files?.length ? framesFrom(files) : [],
+    );
   }
 
   @Patch(':id')
@@ -132,6 +156,11 @@ export class LabourWorkerController {
   }
 
   @Post(':id/face-enrolment')
+  @UseInterceptors(LivenessFramesInterceptor())
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(
+    livenessMultipartBody({ challengeId: { type: 'string' } }, ['challengeId']),
+  )
   @ApiOperation({
     summary:
       "Enrol a worker's face, reusing 003's biometric machinery (FR-011)",
@@ -140,8 +169,15 @@ export class LabourWorkerController {
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
     @Body() dto: EnrolWorkerFaceDto,
+    @UploadedFiles() files: UploadedFrame[],
     @Ip() ip: string,
   ) {
-    return this.workers.enrolFace(caller, id, dto.photos, ip);
+    return this.workers.enrolFace(
+      caller,
+      id,
+      dto.challengeId,
+      framesFrom(files),
+      ip,
+    );
   }
 }

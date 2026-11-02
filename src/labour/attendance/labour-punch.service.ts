@@ -23,7 +23,10 @@ import { StorageService } from '../../common/storage/storage.service';
 import { assertInScope } from '../../settings/company-scope';
 import { BiometricsService } from '../../hr/biometrics/biometrics.service';
 import { ImageProcessingService } from '../../hr/biometrics/image-processing.service';
-import { decodePhotoPayload } from '../../hr/biometrics/photo-payload';
+import {
+  LivenessService,
+  livenessSubject,
+} from '../../hr/biometrics/liveness.service';
 import { zonedDateOnly } from '../../hr/leave/leave-days';
 import { checkGeofence } from '../../hr/punch/geofence.util';
 import {
@@ -104,6 +107,7 @@ export class LabourPunchService {
     private readonly images: ImageProcessingService,
     private readonly supervisorSites: SupervisorSiteService,
     private readonly days: LabourDayService,
+    private readonly liveness: LivenessService,
   ) {}
 
   /**
@@ -249,6 +253,7 @@ export class LabourPunchService {
       accuracyMetres: r.accuracyMetres?.toNumber() ?? null,
       faceMatchDistance: r.faceMatchDistance?.toNumber() ?? null,
       hasPhoto: r.photoRef !== null,
+      livenessFailure: r.livenessFailure,
     }));
   }
 
@@ -277,11 +282,13 @@ export class LabourPunchService {
       siteId: string;
       workerId: string;
       type: LabourPunchType;
-      photo: string;
+      challengeId: string;
       latitude: number;
       longitude: number;
       accuracyMeters?: number;
     },
+    /** The liveness capture (057), in the challenge's step order. */
+    frames: Buffer[],
     ipAddress: string,
   ): Promise<LabourPunchResult> {
     await this.supervisorSites.assertSiteAllowed(caller, dto.siteId);
@@ -328,16 +335,35 @@ export class LabourPunchService {
     // sum. The face is computed from the photo as uploaded, not the compressed copy — the matcher
     // downscales on its own, and waiting for the re-encode only delayed it. The checks below still
     // run in the order they always have; only the waiting overlaps.
-    const photo = decodePhotoPayload(dto.photo, 'Labour photo');
-    const [geofence, accuracyMax, compressed, stored, candidate, rules] =
+    //
+    // 057: the capture follows a liveness challenge issued for this supervisor and this labour,
+    // spent here once whatever the outcome. The straight frame is the punch photo.
+    const steps = await this.liveness.consume(
+      dto.challengeId,
+      livenessSubject(caller.id, 'labour-punch', worker.id),
+    );
+    const photo = frames[steps.indexOf('straight')] ?? frames[0];
+    const [geofence, accuracyMax, compressed, stored, judgement, rules] =
       await Promise.all([
         this.refs.getSiteGeofence(caller, dto.siteId),
         this.refs.getPunchAccuracyMaxMetres(worker.companyId),
         this.images.compressPunchPhoto(photo),
         this.enrolledTemplate(worker.faceEnrolmentId),
-        this.biometrics.computeDescriptor([photo]).catch(() => null),
+        this.liveness.judge(steps, frames),
         this.refs.getDayRules(worker.companyId),
       ]);
+    const candidate = judgement.straight?.descriptor ?? null;
+    // No face in the straight frame keeps `no_face_detected`; any other failed check is liveness.
+    const livenessFailure =
+      judgement.failure &&
+      !(
+        judgement.failure.kind === 'no_face' &&
+        judgement.failure.step === 'straight'
+      )
+        ? judgement.failure
+        : null;
+    const livenessScore =
+      judgement.realScore === null ? null : judgement.realScore.toFixed(4);
 
     // --- Location: the employee rule (020 FR-011 to FR-013). ---
     if (!geofence.isActive) {
@@ -361,12 +387,15 @@ export class LabourPunchService {
       ? LabourPunchRefusalReason.outside_geofence
       : null;
 
-    // --- Face: always refuses on failure (031). ---
+    // --- Face and liveness: always refuse on failure (031, 057). Liveness before the match: a
+    // picture of the right labour matches, and the true reason is that it was not a live face. ---
     const match = candidate
       ? this.biometrics.compareDescriptors(candidate, stored)
       : null;
     const faceReason = !candidate
       ? LabourPunchRefusalReason.no_face_detected
+      : livenessFailure
+      ? LabourPunchRefusalReason.liveness_failed
       : !match?.matched
       ? LabourPunchRefusalReason.face_mismatch
       : null;
@@ -399,6 +428,8 @@ export class LabourPunchService {
             distanceMetres: distanceMeters,
             faceMatchDistance: match?.distance ?? null,
             photoRef: refusalPhotoRef,
+            livenessScore,
+            livenessFailure: livenessFailure?.kind ?? null,
           },
         }),
       ).catch(async (error: unknown) => {
@@ -415,6 +446,7 @@ export class LabourPunchService {
           (unlocatable ? 0 : dto.accuracyMeters ?? 0),
         accuracyMeters: dto.accuracyMeters,
         accuracyMaxMeters: accuracyMax,
+        liveness: livenessFailure ?? undefined,
       });
     }
 
@@ -453,6 +485,7 @@ export class LabourPunchService {
             supervisorId: caller.id,
             photoRef,
             faceMatchDistance: match?.distance ?? 0,
+            livenessScore,
             latitude: dto.latitude,
             longitude: dto.longitude,
             accuracyMetres: dto.accuracyMeters ?? null,

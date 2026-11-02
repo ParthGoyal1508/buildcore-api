@@ -2,9 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { EngagementType, LabourGender, WorkerStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
-  ArrayMinSize,
-  IsArray,
   IsDateString,
   IsEnum,
   IsIn,
@@ -20,9 +17,6 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
-import { IsBase64Payload } from '../../../common/uploads/base64-payload';
-
-import { ENROLMENT_PHOTOS } from '../../constants/labour.constants';
 
 /** Ten digits, optionally after +91 / 91 / 0, spaces and dashes allowed. */
 const PHONE_PATTERN = /^(?:\+?91[\s-]?|0)?[6-9]\d{4}[\s-]?\d{5}$/;
@@ -123,18 +117,15 @@ export class CreateWorkerDto {
   siteId!: string;
 
   @ApiPropertyOptional({
-    type: [String],
     description:
-      'Base64 face photos (3 to 5). Sent with the registration so a labour is never left ' +
-      'registered without a face to match.',
+      'The liveness challenge the face capture followed (057, flow `labour-enrolment`). With it, ' +
+      'the multipart `frames` (two facing the camera, then the two head turns) are registered as ' +
+      'the face in the same request, so a labour is never left without a face to match.',
   })
   @IsOptional()
-  @IsArray()
-  @ArrayMinSize(ENROLMENT_PHOTOS.min)
-  @ArrayMaxSize(ENROLMENT_PHOTOS.max)
-  @IsString({ each: true })
-  @IsBase64Payload({ each: true })
-  photos?: string[];
+  @IsString()
+  @MaxLength(64)
+  challengeId?: string;
 
   // Optional since 031 — kept for the office, which may know them.
   @ApiPropertyOptional({ example: '1990-05-20' })
@@ -175,6 +166,8 @@ export class CreateWorkerDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  // Multipart sends text (057).
+  @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
   @Max(9_999_999_999.99)
@@ -195,15 +188,14 @@ export class DeactivateWorkerDto {
 
 export class EnrolWorkerFaceDto {
   @ApiProperty({
-    type: [String],
-    description: 'Base64/data-URL enrolment photos',
+    description:
+      'The liveness challenge the capture followed (057, flow `labour-enrolment`); the photos are ' +
+      'the multipart `frames`.',
   })
-  @IsArray()
-  @ArrayMinSize(ENROLMENT_PHOTOS.min)
-  @ArrayMaxSize(ENROLMENT_PHOTOS.max)
-  @IsString({ each: true })
-  @IsBase64Payload({ each: true })
-  photos!: string[];
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  challengeId!: string;
 }
 
 /**

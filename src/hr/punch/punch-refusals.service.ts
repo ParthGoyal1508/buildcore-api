@@ -3,6 +3,7 @@ import { Prisma, PunchRefusalReason, PunchType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
+import { sweepPhotos } from '../../common/storage/photo-retention';
 import { StorageService } from '../../common/storage/storage.service';
 
 export interface PunchRefusalInput {
@@ -18,6 +19,9 @@ export interface PunchRefusalInput {
   capturedAt: Date;
   /** The refused attempt's stored photo (057); null for a would-be refusal or a failed upload. */
   photoRef?: string | null;
+  /** The capture's mean anti-spoof score, and which liveness check failed (057). */
+  livenessScore?: number | null;
+  livenessFailure?: string | null;
 }
 
 /**
@@ -49,6 +53,8 @@ const REFUSAL_ROW_SELECT = {
   capturedAt: true,
   createdAt: true,
   photoRef: true,
+  livenessScore: true,
+  livenessFailure: true,
 } as const;
 
 export type PunchRefusalRow = {
@@ -65,6 +71,9 @@ export type PunchRefusalRow = {
   createdAt: Date;
   /** A photo of the attempt is still held (057) — false once the retention sweep deletes it. */
   hasPhoto: boolean;
+  /** The capture's mean anti-spoof score (057), and for `liveness_failed` which check failed. */
+  livenessScore: Prisma.Decimal | null;
+  livenessFailure: string | null;
 };
 
 /** The storage key stays on the server; a reader learns only whether a photo exists. */
@@ -112,6 +121,11 @@ export class PunchRefusalsService {
             faceMatchDistance: input.faceMatchDistance ?? null,
             capturedAt: input.capturedAt,
             photoRef: input.photoRef ?? null,
+            livenessScore:
+              input.livenessScore == null
+                ? null
+                : input.livenessScore.toFixed(4),
+            livenessFailure: input.livenessFailure ?? null,
           },
         }),
       );
@@ -203,6 +217,38 @@ export class PunchRefusalsService {
       }),
     );
     return rows.map(toRow);
+  }
+
+  /**
+   * Deletes refused-attempt photos taken before `cutoff` (057 retention), oldest first, and returns
+   * how many went. Here rather than in the sweep because this table is read and written only from
+   * this service (FR-013d, `refusal-surface.spec.ts`): the sweep also clears attendance photos, and
+   * one file reaching into both is exactly what that guard exists to stop.
+   */
+  async deletePhotosBefore(cutoff: Date, logger: Logger): Promise<number> {
+    const superAdmin = { isSuperAdmin: true };
+    return sweepPhotos(
+      this.storage,
+      logger,
+      'Refused punch photos',
+      (take) =>
+        withRlsContext(this.prisma, superAdmin, (tx) =>
+          tx.punchRefusal.findMany({
+            where: { photoRef: { not: null }, capturedAt: { lt: cutoff } },
+            orderBy: { capturedAt: 'asc' },
+            take,
+            select: { id: true, photoRef: true },
+          }),
+        ) as Promise<{ id: string; photoRef: string }[]>,
+      async (rows) => {
+        await withRlsContext(this.prisma, superAdmin, (tx) =>
+          tx.punchRefusal.updateMany({
+            where: { id: { in: rows.map((r) => r.id) } },
+            data: { photoRef: null },
+          }),
+        );
+      },
+    );
   }
 
   /**

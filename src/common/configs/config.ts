@@ -390,6 +390,21 @@ const config: Config = {
         ),
       },
     },
+    liveness: {
+      challengeTtlSeconds: numberFromEnv(
+        process.env.WORKSPACE_LIVENESS_CHALLENGE_TTL_SECONDS,
+        120,
+      ),
+      // A slight three-quarter turn measures ~0.15–0.17 (057, measured on reference portraits);
+      // a flat photo turned or tilted stays near 0, because a plane cannot move its nose.
+      minTurn: numberFromEnv(process.env.WORKSPACE_LIVENESS_MIN_TURN, 0.12),
+      // The original models' own decision point (the real class winning the summed softmax).
+      // To be calibrated on site devices; every punch records its score.
+      minRealScore: numberFromEnv(
+        process.env.WORKSPACE_LIVENESS_MIN_REAL_SCORE,
+        0.5,
+      ),
+    },
     photoRetention: {
       punchDays: numberFromEnv(
         process.env.WORKSPACE_PUNCH_PHOTO_RETENTION_DAYS,

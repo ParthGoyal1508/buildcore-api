@@ -12,6 +12,8 @@ import { collectLargeBodyRoutes, largeBodyMatcher } from './large-body';
  * an upload route means adding it here.
  */
 const UPLOAD_ROUTES = [
+  // 057: the punch and face-enrolment routes left this list — their photos are multipart frames,
+  // parsed by multer under its own per-file limit, not base64 in a large JSON body.
   'PATCH /labour/payment-sheets/lines/:lineId/disburse',
   'PATCH /my/reimbursements/:id',
   'PATCH /recruitment/onboarding/items/:id/verify',
@@ -33,14 +35,8 @@ const UPLOAD_ROUTES = [
   'POST /inventory/site-entries',
   'POST /inventory/vendor-rates/import/confirm',
   'POST /inventory/vendor-rates/import/validate',
-  'POST /labour/attendance/punch',
   'POST /labour/muster-attendance/site-photos',
-  'POST /labour/workers',
-  'POST /labour/workers/:id/face-enrolment',
   'POST /letters/:id/countersigned',
-  'POST /my/face-enrol',
-  'POST /my/face-enrol/re-enrolment-complete',
-  'POST /my/punch',
   'POST /my/reimbursements',
   'POST /nocs',
   'POST /partners/contractors/:id/documents',

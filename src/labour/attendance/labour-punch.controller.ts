@@ -7,9 +7,17 @@ import {
   Post,
   Query,
   Res,
+  UploadedFiles,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 import type { Response } from 'express';
 
@@ -18,6 +26,12 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import {
+  framesFrom,
+  LivenessFramesInterceptor,
+  livenessMultipartBody,
+  UploadedFrame,
+} from '../../common/uploads/liveness-frames';
 import {
   LabourDayQueryDto,
   LabourPunchDto,
@@ -81,18 +95,35 @@ export class LabourPunchController {
   }
 
   @Post('punch')
+  @UseInterceptors(LivenessFramesInterceptor())
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(
+    livenessMultipartBody(
+      {
+        siteId: { type: 'string' },
+        workerId: { type: 'string' },
+        type: { type: 'string', enum: ['in', 'out'] },
+        challengeId: { type: 'string' },
+        latitude: { type: 'number' },
+        longitude: { type: 'number' },
+        accuracyMeters: { type: 'number' },
+      },
+      ['siteId', 'workerId', 'type', 'challengeId', 'latitude', 'longitude'],
+    ),
+  )
   @ApiOperation({
-    summary: 'Punch a labour in or out with a face photo and GPS fix',
+    summary: 'Punch a labour in or out with a liveness capture and GPS fix',
     description:
-      'A face mismatch is refused with 422 LABOUR_PUNCH_REFUSED_FACE. Location follows the ' +
-      'employee rule: refused (422) when the company enforces the punch block, otherwise ' +
-      'accepted and flagged.',
+      'Multipart since 057. A face mismatch is refused with 422 LABOUR_PUNCH_REFUSED_FACE, a ' +
+      'capture that is not a live person with LABOUR_PUNCH_REFUSED_LIVENESS. Location follows ' +
+      'the employee rule: refused (422) when the company enforces the punch block.',
   })
   async punch(
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: LabourPunchDto,
+    @UploadedFiles() files: UploadedFrame[],
     @Ip() ip: string,
   ) {
-    return this.punches.punch(caller, dto, ip);
+    return this.punches.punch(caller, dto, framesFrom(files), ip);
   }
 }

@@ -66,6 +66,7 @@ what had failed.
 - Q: The phone will not give a location at all (permission refused, GPS off). What then? → A: **The app explains how to fix it on that device** — separate steps for an installed Android app, Android Chrome, iPhone (home-screen app and Safari) and desktop, and for location switched off — and asks for camera and location once, on first open, for anyone who marks attendance. A web app cannot open phone settings or pre-declare permissions; asking on a tap and explaining a refusal is the whole of what is available, and iOS may still ask again in later sessions.
 - Q: Is the photo of a refused attempt kept? → A: **Yes, for 30 days, then deleted** — reversing plan D20, which kept none. With refusal now the only outcome of a failed check, the photo is the one way an administrator can see who was in front of the camera. It is stored with the refusal row, never as attendance, and served only to callers who can read the refusal log (FR-013c).
 - Q: What can a reviewer see? → A: **The evidence, not only the verdict.** The refusal log and the older exception queue both show where the attempt was made (a map link), how far from the site, and the photo while it is held. Previously the exception queue said only that the face or the fence had failed.
+- Q: A photo of an employee held up to the webcam was accepted as their punch. How is a live person told apart from a picture? → A: **Every face capture follows a liveness challenge** (057). The server issues a one-time challenge (two minutes, single use, bound to the caller and — for a labour punch — the labour) naming the frames to capture: facing the camera, then the head turned to each side in a random order. The server checks that the head actually turned the way asked (a flat picture cannot move its nose off the line between the eyes, however it is tilted), that every frame shows the same person, and that a passive anti-spoof model (MiniFASNet, Apache-2.0) does not score the frames as a print or a screen. A failure is refused as `liveness_failed` saying which check failed. Measured on 2026-11-02 against a still photo of an enrolled face: the face matched (distance 0.08) and the passive model scored it live (0.99) — the head-turn check is what refused it, which is why both checks exist. The passive threshold is configurable and is to be calibrated on site devices; every punch records its score.
 - Q: How long are attendance photos kept? → A: **An accepted punch's photo 14 days; a refused attempt's 30 days**, then deleted by a nightly sweep. The punch row, its time and its location stay — only the picture goes. A punch whose exception is still pending keeps its photo until resolved. Enrolment photos are not covered. (A 15-day setting existed before this but nothing applied it; photos were in fact kept for ever.)
 
 ## User Scenarios & Testing *(mandatory)*
@@ -273,6 +274,11 @@ attendance record created by either.
   in it can be approved into a present day. Since 057 each refusal also keeps the attempt's photo for
   the refusal retention period (30 days), shown to the log's readers with the location and distance
   (Clarifications, 2026-11-02).
+- **FR-012d** (057): System MUST refuse a punch whose capture does not show a live person — the
+  head not turning as the server-issued challenge asked, a different face between frames, or the
+  passive anti-spoof score below the configured threshold — as `liveness_failed`, naming the failed
+  check in the refusal's `detail.liveness` and its message, and recording the score with every
+  accepted punch and refusal for calibration.
 - **FR-013e** (057): System MUST delete an accepted punch's photo after the punch photo retention
   period (default 14 days, configurable by deployment) unless its exception is still pending, and a
   refused attempt's photo after the refusal retention period (default 30 days), keeping every other

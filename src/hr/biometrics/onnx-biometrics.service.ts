@@ -15,14 +15,14 @@ import {
   NoFaceDetectedError,
   cosineDistance,
 } from './biometrics.service';
-import { normalise } from './face-inference';
+import { FaceAnalysis, normalise } from './face-inference';
 import type {
   FaceInferenceRequest,
   FaceInferenceResponse,
 } from './face-inference.worker';
 
 interface Pending {
-  resolve: (descriptor: Float32Array | null) => void;
+  resolve: (result: Float32Array | FaceAnalysis | null) => void;
   reject: (error: Error) => void;
 }
 
@@ -150,6 +150,7 @@ export class OnnxBiometricsService
           this.pending.delete(message.id);
           if (this.pending.size === 0) worker.unref();
           if ('error' in message) waiting?.reject(new Error(message.error));
+          else if ('analysis' in message) waiting?.resolve(message.analysis);
           else waiting?.resolve(message.descriptor);
         }
       });
@@ -175,6 +176,13 @@ export class OnnxBiometricsService
 
   /** One photo to its embedding, or null when it shows no face. */
   private descriptorFor(photo: Buffer): Promise<Float32Array | null> {
+    return this.request(photo, 'descriptor') as Promise<Float32Array | null>;
+  }
+
+  private request(
+    photo: Buffer,
+    kind: FaceInferenceRequest['kind'],
+  ): Promise<Float32Array | FaceAnalysis | null> {
     const worker = this.worker;
     if (!worker) {
       return Promise.reject(new Error('Face inference worker is not running.'));
@@ -183,8 +191,13 @@ export class OnnxBiometricsService
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       worker.ref();
-      worker.postMessage({ id, photo } satisfies FaceInferenceRequest);
+      worker.postMessage({ id, photo, kind } satisfies FaceInferenceRequest);
     });
+  }
+
+  async analyse(photo: Buffer): Promise<FaceAnalysis | null> {
+    await this.ensureLoaded();
+    return this.request(photo, 'analyse') as Promise<FaceAnalysis | null>;
   }
 
   async computeDescriptor(photos: Buffer[]): Promise<Float32Array> {

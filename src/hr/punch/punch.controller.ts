@@ -8,9 +8,13 @@ import {
   Query,
   Req,
   UseGuards,
+  UploadedFiles,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiResponse,
   ApiTags,
@@ -31,6 +35,12 @@ import {
 } from './dto/punch.dto';
 import { PunchService } from './punch.service';
 import { SelfService } from '../../common/decorators/route-access.decorator';
+import {
+  framesFrom,
+  LivenessFramesInterceptor,
+  livenessMultipartBody,
+  UploadedFrame,
+} from '../../common/uploads/liveness-frames';
 
 @ApiTags('My Workspace')
 @ApiBearerAuth()
@@ -50,7 +60,28 @@ export class PunchController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Submit a punch in/out for the caller' })
+  @UseInterceptors(LivenessFramesInterceptor())
+  @ApiConsumes('multipart/form-data')
+  @ApiBody(
+    livenessMultipartBody(
+      {
+        type: { type: 'string', enum: ['in', 'out'] },
+        challengeId: { type: 'string' },
+        latitude: { type: 'number' },
+        longitude: { type: 'number' },
+        accuracyMeters: { type: 'number' },
+        capturedAt: { type: 'string', format: 'date-time' },
+      },
+      ['type', 'challengeId', 'latitude', 'longitude', 'capturedAt'],
+    ),
+  )
+  @ApiOperation({
+    summary: 'Submit a punch in/out for the caller',
+    description:
+      'Multipart since 057: the liveness capture as `frames` (one JPEG per challenge step, in ' +
+      'order) and the fields beside them. Refused with 422 `PUNCH_REFUSED_LIVENESS` when the ' +
+      'capture does not show a live person.',
+  })
   @ApiResponse({
     status: 201,
     description:
@@ -65,8 +96,13 @@ export class PunchController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Body() dto: SubmitPunchDto,
+    @UploadedFiles() files: UploadedFrame[],
   ): Promise<PunchResultDto> {
-    return this.punch.submitPunch(callerFrom(user, request), dto);
+    return this.punch.submitPunch(
+      callerFrom(user, request),
+      dto,
+      framesFrom(files),
+    );
   }
 
   @Get('open')

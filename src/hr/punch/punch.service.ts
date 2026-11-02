@@ -37,7 +37,10 @@ import { SitesService } from '../../projects/sites/sites.service';
 import { BiometricsService } from '../biometrics/biometrics.service';
 import { ImageProcessingService } from '../biometrics/image-processing.service';
 import { parseDateOnly, zonedDateOnly } from '../leave/leave-days';
-import { decodePhotoPayload } from '../biometrics/photo-payload';
+import {
+  LivenessService,
+  livenessSubject,
+} from '../biometrics/liveness.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import { EmployeeDocumentsService } from '../employees/documents/employee-documents.service';
 import { EmployeesService } from '../employees/employees.service';
@@ -122,6 +125,7 @@ export class PunchService {
     private readonly sites: SitesService,
     private readonly companies: CompaniesService,
     private readonly biometrics: BiometricsService,
+    private readonly liveness: LivenessService,
     private readonly images: ImageProcessingService,
     private readonly storage: StorageService,
     private readonly auditLog: AuditLogService,
@@ -174,7 +178,12 @@ export class PunchService {
     };
   }
 
-  async submitPunch(caller: Caller, dto: SubmitPunchDto): Promise<PunchResult> {
+  async submitPunch(
+    caller: Caller,
+    dto: SubmitPunchDto,
+    /** The liveness capture (057), in the challenge's step order. */
+    frames: Buffer[],
+  ): Promise<PunchResult> {
     const employee = await this.employees.requireByUserId(
       caller.rls,
       caller.userId,
@@ -288,7 +297,15 @@ export class PunchService {
     // true for a year and is the first thing a reader of this method learns. It is rewritten in the
     // same commit as the refusal, because a comment that survives the change it describes is worse
     // than no comment: it is believed. ---
-    const photoBytes = decodePhotoPayload(dto.photo, 'Punch photo');
+    //
+    // 057: the capture is a liveness challenge's frames. The challenge is spent here, once, whatever
+    // the outcome — a refused attempt starts again with a fresh one, so a capture cannot be replayed.
+    const steps = await this.liveness.consume(
+      dto.challengeId,
+      livenessSubject(caller.userId, 'staff-punch'),
+    );
+    // The straight frame is the punch's photo: the one matched against the template and stored.
+    const photoBytes = frames[steps.indexOf('straight')] ?? frames[0];
 
     // The calendar day this punch counts for — the employee's, not the server's (FR-018a).
     // Computed **here**, before the fence is resolved, because 020 FR-016's per-employee
@@ -302,14 +319,12 @@ export class PunchService {
     // The face is computed from the photo as uploaded rather than from the compressed copy —
     // the matcher downscales on its own, and waiting for the re-encode only delayed it. Every
     // check below still runs in the order it always has; only the waiting overlaps.
-    const [compressed, candidate, { assignment, geofence }, accuracyMax] =
+    const [compressed, judgement, { assignment, geofence }, accuracyMax] =
       await Promise.all([
         this.images.compressPunchPhoto(photoBytes),
-        this.biometrics
-          .computeDescriptor([photoBytes])
-          // A photo with no detectable face is an exception for an admin to look at,
-          // not a 400 — the worker is presumably standing there regardless.
-          .catch(() => null),
+        // 057: every frame analysed once — face, head turn and anti-spoof score — on the worker.
+        // A failed check is a verdict, not an error; only a malformed capture throws.
+        this.liveness.judge(steps, frames),
         // 020 FR-011, FR-016. No assignment → the employee's own site fence, exactly as
         // before. That is every employee on the day this ships, which is why this table can
         // be introduced with no backfill and refuse nobody.
@@ -332,14 +347,30 @@ export class PunchService {
         this.companies.getPunchAccuracyMaxMetres(employee.companyId),
       ]);
 
+    // No face in the straight frame keeps its own reason (`no_face_detected`); every other failed
+    // liveness check is `liveness_failed`, with which check in the refusal's detail.
+    const candidate = judgement.straight?.descriptor ?? null;
+    const livenessFailure =
+      judgement.failure &&
+      !(
+        judgement.failure.kind === 'no_face' &&
+        judgement.failure.step === 'straight'
+      )
+        ? judgement.failure
+        : null;
+    const livenessScore = judgement.realScore;
+
     const stored = this.biometrics.deserializeDescriptor(enrolment.descriptor);
     let faceMatchResult: FaceMatchResult = FaceMatchResult.exception;
     let faceMatchDistance: number | null = null;
     if (candidate) {
       const match = this.biometrics.compareDescriptors(candidate, stored);
-      faceMatchResult = match.matched
-        ? FaceMatchResult.matched
-        : FaceMatchResult.exception;
+      // A capture that is not a live person is not a face match, whatever the distance — which is
+      // what flags it, too, on a company that has the block switched off.
+      faceMatchResult =
+        match.matched && !livenessFailure
+          ? FaceMatchResult.matched
+          : FaceMatchResult.exception;
       faceMatchDistance = match.distance;
     }
 
@@ -419,6 +450,10 @@ export class PunchService {
         // the worker is presumably standing there regardless — and under the block it becomes a
         // refusal for the same reason: it is a failed check, not a malformed request.
         PunchRefusalReason.no_face_detected
+      : livenessFailure
+      ? // 057. Before a mismatch: a picture of the right person matches, and the worker is owed
+        // the reason that is actually true — that it was not a live face.
+        PunchRefusalReason.liveness_failed
       : PunchRefusalReason.face_mismatch;
 
     // Read before the refusal is logged (057), because whether the attempt is refused decides
@@ -457,6 +492,8 @@ export class PunchService {
         faceMatchDistance,
         capturedAt,
         photoRef: refusalPhotoRef,
+        livenessScore,
+        livenessFailure: livenessFailure?.kind ?? null,
       });
     }
 
@@ -487,6 +524,7 @@ export class PunchService {
           (unlocatable ? 0 : dto.accuracyMeters ?? 0),
         accuracyMeters: dto.accuracyMeters,
         accuracyMaxMeters: accuracyMax,
+        liveness: livenessFailure ?? undefined,
       });
     }
 
@@ -568,6 +606,10 @@ export class PunchService {
           photoRef,
           faceMatchResult,
           faceMatchDistance,
+          livenessScore:
+            livenessScore === null
+              ? null
+              : new Prisma.Decimal(livenessScore.toFixed(4)),
           latitude: new Prisma.Decimal(dto.latitude),
           longitude: new Prisma.Decimal(dto.longitude),
           geofenceResult,
