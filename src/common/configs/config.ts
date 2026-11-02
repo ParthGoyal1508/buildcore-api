@@ -398,11 +398,13 @@ const config: Config = {
       // A slight three-quarter turn measures ~0.15–0.17 (057, measured on reference portraits);
       // a flat photo turned or tilted stays near 0, because a plane cannot move its nose.
       minTurn: numberFromEnv(process.env.WORKSPACE_LIVENESS_MIN_TURN, 0.12),
-      // The original models' own decision point (the real class winning the summed softmax).
-      // To be calibrated on site devices; every punch records its score.
+      // Above the models' own decision point (0.5, the real class winning the summed softmax):
+      // a phone photo held to a laptop webcam scored 0.59 and a live face 0.999 (057, first local
+      // test), so 0.5 let the photo through on this check alone. Every punch records its score,
+      // for tuning on site devices.
       minRealScore: numberFromEnv(
         process.env.WORKSPACE_LIVENESS_MIN_REAL_SCORE,
-        0.5,
+        0.8,
       ),
     },
     photoRetention: {

@@ -56,7 +56,7 @@ class ScriptedBiometrics extends BiometricsService {
 
 const config = {
   get: () => ({
-    liveness: { challengeTtlSeconds: 120, minTurn: 0.12, minRealScore: 0.5 },
+    liveness: { challengeTtlSeconds: 120, minTurn: 0.12, minRealScore: 0.8 },
   }),
 };
 
@@ -188,6 +188,19 @@ describe('LivenessService', () => {
       );
       expect(result.failure).toEqual({ kind: 'spoof' });
       expect(result.realScore).toBeCloseTo(0.25);
+    });
+
+    it('refuses a phone photo that only just wins the models’ own vote', async () => {
+      // 0.59: a phone photo held to a laptop webcam, which turned with the hand holding it.
+      const result = await judge(
+        {
+          f0: { yaw: 0, real: 0.59 },
+          f1: { yaw: 0.3, real: 0.59 },
+          f2: { yaw: -0.3, real: 0.59 },
+        },
+        ['straight', 'left', 'right'],
+      );
+      expect(result.failure).toEqual({ kind: 'spoof' });
     });
 
     it('names the straight frame when it has no face, and a turn frame when that has none', async () => {
