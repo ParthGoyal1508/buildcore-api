@@ -3,12 +3,15 @@ import {
   Controller,
   Get,
   Ip,
+  Param,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -42,12 +45,39 @@ export class LabourPunchController {
   }
 
   @Get('refusals')
+  // HR reviews them too (057): the same pair the group-photo routes accept.
+  @RequirePermissions(
+    Permission.DAILY_WORKER_REGISTRY,
+    Permission.LABOUR_APPROVE,
+  )
   @ApiOperation({ summary: 'Refused labour punches at a site, newest first' })
   async refusals(
     @UserEntity() caller: AuthenticatedUser,
     @Query() query: LabourRefusalsQueryDto,
   ) {
     return this.punches.refusals(caller, query.siteId, query.days);
+  }
+
+  @Get('refusals/:id/photo')
+  @RequirePermissions(
+    Permission.DAILY_WORKER_REGISTRY,
+    Permission.LABOUR_APPROVE,
+  )
+  @ApiOperation({
+    summary: 'The photo of one refused labour punch (JPEG, 057)',
+    description:
+      'At a site the caller may see. Kept for the refusal retention period (30 days by default); ' +
+      '404 after the sweep deletes it.',
+  })
+  async refusalPhoto(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.punches.refusalPhoto(caller, id);
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buffer);
   }
 
   @Post('punch')

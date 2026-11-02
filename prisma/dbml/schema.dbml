@@ -2741,6 +2741,9 @@ than one adjusted by the accuracy allowance.']
   distanceMeters Decimal
   accuracyMeters Int
   faceMatchDistance Decimal [note: 'The face-match distance, when a comparison happened at all. A number, not a biometric.']
+  photoRef String [note: 'The photo of the refused attempt (057), kept for review and deleted by the retention sweep
+after `refusalPhotoRetentionDays`; null once deleted, or for a would-be refusal recorded while
+the block was off (that punch keeps its own photo).']
   capturedAt DateTime [not null, note: 'When the punch was taken, and when it reached the server — a refused offline punch may arrive
 long after the moment it describes.']
   createdAt DateTime [default: `now()`, not null]
@@ -6199,6 +6202,8 @@ Table LabourPunchRefusal {
   accuracyMetres Decimal
   distanceMetres Decimal
   faceMatchDistance Decimal
+  photoRef String [note: 'The photo of the refused attempt (057), kept for review and deleted by the retention sweep
+after `refusalPhotoRetentionDays`; null once deleted.']
   createdAt DateTime [default: `now()`, not null]
 
   Note: '031: a refused labour punch. Nothing is written to attendance, so this is the only trace.'

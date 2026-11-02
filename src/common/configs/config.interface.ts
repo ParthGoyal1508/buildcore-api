@@ -625,16 +625,6 @@ export interface WorkspaceConfig {
     /** How long an approved re-enrolment unlock stays usable (FR-015). */
     unlockDurationDays: number;
   };
-  photoRetention: {
-    /**
-     * Punch photos are evidence for exception review, not a permanent record — they
-     * are purged this many days after capture. Deliberately short: at roughly 30 KB
-     * a photo and two punches per employee per day, a long window is what turns
-     * blob storage into a cost centre, and nothing in the spec needs an old selfie
-     * once its exception is resolved.
-     */
-    punchPhotoDays: number;
-  };
   /**
    * Re-encode parameters applied before a photo is ever stored. Enrolment photos are
    * kept larger and cleaner because descriptor quality depends on them and they are
@@ -646,6 +636,21 @@ export interface WorkspaceConfig {
     punch: { maxDimension: number; jpegQuality: number };
     /** A photograph printed into the DPR workbook beside its measurement (2026-10-12). */
     dprForm: { maxDimension: number; jpegQuality: number };
+  };
+  /**
+   * How long attendance photos are kept (057, client decision 2026-11-02). Face photos are personal
+   * data with a purpose that ends once the attendance is settled: the punch row, its time and its
+   * location stay; only the picture goes. Enrolment photos are not covered — they are the template's
+   * source and leave with it.
+   *
+   * `punchDays` replaces `punchPhotoDays`, which was declared (default 15) and read by nothing — no
+   * sweep existed, so photos were in fact kept for ever. `PunchPhotoRetentionCron` is the sweep.
+   */
+  photoRetention: {
+    /** An accepted punch's photo (staff and labour), from the punch's own time. */
+    punchDays: number;
+    /** A refused attempt's photo, kept longer so a pattern of attempts can still be shown. */
+    refusalDays: number;
   };
   /**
    * Labour (feature 013) tunables. Principle III keeps each of these out of the

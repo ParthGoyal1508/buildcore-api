@@ -4681,6 +4681,11 @@ model PunchRefusal {
   /// The face-match distance, when a comparison happened at all. A number, not a biometric.
   faceMatchDistance Decimal? @db.Decimal(6, 4)
 
+  /// The photo of the refused attempt (057), kept for review and deleted by the retention sweep
+  /// after `refusalPhotoRetentionDays`; null once deleted, or for a would-be refusal recorded while
+  /// the block was off (that punch keeps its own photo).
+  photoRef String?
+
   /// When the punch was taken, and when it reached the server — a refused offline punch may arrive
   /// long after the moment it describes.
   capturedAt DateTime
@@ -10473,6 +10478,10 @@ model LabourPunchRefusal {
   accuracyMetres    Decimal? @db.Decimal(8, 2)
   distanceMetres    Decimal? @db.Decimal(10, 2)
   faceMatchDistance Decimal? @db.Decimal(6, 4)
+
+  /// The photo of the refused attempt (057), kept for review and deleted by the retention sweep
+  /// after `refusalPhotoRetentionDays`; null once deleted.
+  photoRef String?
 
   createdAt DateTime @default(now())
 

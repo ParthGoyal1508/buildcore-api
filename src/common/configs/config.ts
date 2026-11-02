@@ -351,12 +351,6 @@ const config: Config = {
         7,
       ),
     },
-    photoRetention: {
-      punchPhotoDays: numberFromEnv(
-        process.env.WORKSPACE_PUNCH_PHOTO_RETENTION_DAYS,
-        15,
-      ),
-    },
     imageProcessing: {
       // Enrolment photos feed descriptor computation, so they keep more detail.
       enrolment: {
@@ -395,6 +389,16 @@ const config: Config = {
           72,
         ),
       },
+    },
+    photoRetention: {
+      punchDays: numberFromEnv(
+        process.env.WORKSPACE_PUNCH_PHOTO_RETENTION_DAYS,
+        14,
+      ),
+      refusalDays: numberFromEnv(
+        process.env.WORKSPACE_REFUSAL_PHOTO_RETENTION_DAYS,
+        30,
+      ),
     },
     labour: {
       // 013 FR-013. A muster fix worse than this many metres is flagged for review
@@ -591,7 +595,8 @@ const config: Config = {
     driver: (process.env.EMAIL_DRIVER as 'console' | 'resend') || 'console',
     apiKey: process.env.RESEND_API_KEY,
     fromAddress:
-      process.env.EMAIL_FROM_ADDRESS || 'Tirupati Groups <onboarding@resend.dev>',
+      process.env.EMAIL_FROM_ADDRESS ||
+      'Tirupati Groups <onboarding@resend.dev>',
     // Where the set-password link points. Defaults to the local frontend port.
     appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:3001',
     // Off unless a deployment explicitly asks for it — see the interface comment.

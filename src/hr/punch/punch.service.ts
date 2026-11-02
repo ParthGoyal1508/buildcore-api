@@ -50,6 +50,8 @@ import { isPayrollLocked } from './payroll-lock';
 import { webRoutes } from '../../common/web-routes';
 
 const PUNCH_NAMESPACE = 'punch';
+/** A refused attempt's photo (057) — its own namespace, so the two retention periods never mix. */
+export const PUNCH_REFUSAL_NAMESPACE = 'punch-refusal';
 
 /**
  * HTTP 423 Locked — the contract's status for a write into a closed payroll period.
@@ -419,17 +421,30 @@ export class PunchService {
         PunchRefusalReason.no_face_detected
       : PunchRefusalReason.face_mismatch;
 
+    // Read before the refusal is logged (057), because whether the attempt is refused decides
+    // whether its photo is kept with the log row: a refused attempt has no other record, while a
+    // would-be refusal under a disabled block is an accepted punch that keeps its own photo.
+    const enforced = refusalReason
+      ? await this.companies.isPunchBlockEnforced(employee.companyId)
+      : false;
+
     // 020 FR-013c. Recorded whether or not the block is on, and in the same shape either way.
     //
     // While `punchBlockEnforced` is false the punch is **still accepted** and this is the measured
-    // rate at which the block would fire — the figure the client is owed before it does. Once it is
-    // true this is the only trace the attempt happened at all, because FR-013d writes nothing to
-    // attendance. One table serving both is what makes a fortnight of would-be refusals directly
-    // comparable with a fortnight of real ones.
+    // rate at which the block would fire. Once it is true this is the only trace the attempt
+    // happened at all, because FR-013d writes nothing to attendance — which is why, since 057, a
+    // refused attempt keeps its photo here (under its own namespace, for the shorter-lived refusal
+    // retention) so an administrator can see who was in front of the camera.
     //
     // Awaited but non-throwing: neither an accepted punch nor a considered refusal may become a 500
-    // because a log write failed.
+    // because a log or photo write failed. `record` deletes the photo itself if the row is not
+    // written, so a failed log never leaves an orphan in storage.
     if (refusalReason) {
+      const refusalPhotoRef = enforced
+        ? await this.storage
+            .put(PUNCH_REFUSAL_NAMESPACE, compressed, 'image/jpeg')
+            .catch(() => null)
+        : null;
       await this.punchRefusals.record(caller.rls, {
         companyId: employee.companyId,
         employeeId: employee.id,
@@ -441,21 +456,20 @@ export class PunchService {
         accuracyMeters: dto.accuracyMeters ?? null,
         faceMatchDistance,
         capturedAt,
+        photoRef: refusalPhotoRef,
       });
     }
 
     /**
      * 020 FR-013. The inversion, where the company has switched it on.
      *
-     * **Thrown here and not a line later.** Everything that follows this point writes something:
-     * the photo goes to object storage, then the day is locked `FOR UPDATE`, then the row is
-     * inserted. A refusal thrown after the `put` leaves a blob in storage whose only referent was
-     * the row that was never created — an orphan nothing will ever collect, because nothing knows
-     * it exists. Ordering is the whole requirement; the condition is the easy part.
+     * **Thrown here and not a line later.** Everything that follows this point writes attendance:
+     * the punch photo goes to object storage, then the day is locked `FOR UPDATE`, then the row is
+     * inserted. A refusal thrown after the punch `put` would leave a blob whose only referent was a
+     * row never created. (The refusal's own photo, above, belongs to the refusal row.)
      *
      * Read per company and per request, so the client's answer is a settings change rather than a
-     * release, and reversible the same way. Read **after** the refusal has been logged, so turning
-     * the block on does not change what is measured — only who is turned away.
+     * release, and reversible the same way.
      *
      * A refused punch-out can leave the day holding a punch-in nothing will close
      * (checklists/refusal.md CHK031). That is accepted rather than worked around: FR-008a already
@@ -463,22 +477,17 @@ export class PunchService {
      * route back. Closing it automatically here would mean writing to attendance on the refusal
      * path, which FR-013d forbids outright.
      */
-    if (refusalReason) {
-      const enforced = await this.companies.isPunchBlockEnforced(
-        employee.companyId,
-      );
-      if (enforced) {
-        throw punchRefusedException(refusalReason, {
-          // An unlocatable fix gets no distance: it is measured from a position nobody trusts.
-          distanceMeters: unlocatable ? undefined : distanceMeters,
-          // The same fence `checkGeofence` judged against — radius plus the accuracy allowance.
-          allowedMeters:
-            geofence.geofenceRadiusMeters +
-            (unlocatable ? 0 : dto.accuracyMeters ?? 0),
-          accuracyMeters: dto.accuracyMeters,
-          accuracyMaxMeters: accuracyMax,
-        });
-      }
+    if (refusalReason && enforced) {
+      throw punchRefusedException(refusalReason, {
+        // An unlocatable fix gets no distance: it is measured from a position nobody trusts.
+        distanceMeters: unlocatable ? undefined : distanceMeters,
+        // The same fence `checkGeofence` judged against — radius plus the accuracy allowance.
+        allowedMeters:
+          geofence.geofenceRadiusMeters +
+          (unlocatable ? 0 : dto.accuracyMeters ?? 0),
+        accuracyMeters: dto.accuracyMeters,
+        accuracyMaxMeters: accuracyMax,
+      });
     }
 
     const photoRef = await this.storage.put(

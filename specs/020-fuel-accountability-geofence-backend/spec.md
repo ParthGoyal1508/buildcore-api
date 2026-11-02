@@ -64,6 +64,9 @@ what had failed.
 - Q: Should the block now apply to every company? → A: **Yes — refuse, never record as an exception.** A migration sets `punchBlockEnforced` true for every company and makes true the default. The column, the service branches that read it and the Settings toggle's code are **kept**, with the toggle hidden, so a company can be switched back by an update and no release.
 - Q: What must a refusal tell the worker? → A: **What was measured, not only that it failed.** A location refusal quotes the distance from the site and the fence it was judged against; an unlocatable refusal quotes the phone's reported accuracy and the company's threshold and tells the worker to switch Location (GPS) on; a face refusal says whether no face was seen or the face did not match. The figures also travel in the 422 body as `detail`, so a client renders them in its own words (FR-013b).
 - Q: The phone will not give a location at all (permission refused, GPS off). What then? → A: **The app explains how to fix it on that device** — separate steps for an installed Android app, Android Chrome, iPhone (home-screen app and Safari) and desktop, and for location switched off — and asks for camera and location once, on first open, for anyone who marks attendance. A web app cannot open phone settings or pre-declare permissions; asking on a tap and explaining a refusal is the whole of what is available, and iOS may still ask again in later sessions.
+- Q: Is the photo of a refused attempt kept? → A: **Yes, for 30 days, then deleted** — reversing plan D20, which kept none. With refusal now the only outcome of a failed check, the photo is the one way an administrator can see who was in front of the camera. It is stored with the refusal row, never as attendance, and served only to callers who can read the refusal log (FR-013c).
+- Q: What can a reviewer see? → A: **The evidence, not only the verdict.** The refusal log and the older exception queue both show where the attempt was made (a map link), how far from the site, and the photo while it is held. Previously the exception queue said only that the face or the fence had failed.
+- Q: How long are attendance photos kept? → A: **An accepted punch's photo 14 days; a refused attempt's 30 days**, then deleted by a nightly sweep. The punch row, its time and its location stay — only the picture goes. A punch whose exception is still pending keeps its photo until resolved. Enrolment photos are not covered. (A 15-day setting existed before this but nothing applied it; photos were in fact kept for ever.)
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -267,7 +270,13 @@ attendance record created by either.
 - **FR-013c**: System MUST record the refusal for operational and security purposes — who attempted,
   when, where, and which check failed — separately from attendance, so that a pattern of refusals is
   reviewable without any of them being attendance. This is a log, not a reviewable item, and nothing
-  in it can be approved into a present day.
+  in it can be approved into a present day. Since 057 each refusal also keeps the attempt's photo for
+  the refusal retention period (30 days), shown to the log's readers with the location and distance
+  (Clarifications, 2026-11-02).
+- **FR-013e** (057): System MUST delete an accepted punch's photo after the punch photo retention
+  period (default 14 days, configurable by deployment) unless its exception is still pending, and a
+  refused attempt's photo after the refusal retention period (default 30 days), keeping every other
+  field of the row.
 - **FR-014**: System MUST support marking an employee as mobile, exempting them from location
   validation, and MUST make that exemption visible and attributable. The exemption MUST NOT extend to
   face validation: a mobile employee's punch MUST still be refused for a face mismatch under FR-013

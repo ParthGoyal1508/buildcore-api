@@ -7,6 +7,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -16,7 +17,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AccessLevel, Permission } from '@prisma/client';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -243,5 +244,30 @@ export class AttendanceAdminController {
         to: query.to ? new Date(query.to) : undefined,
       },
     );
+  }
+
+  @Get('refusals/:id/photo')
+  @RequireLevel(AccessLevel.write)
+  @ApiOperation({
+    summary: 'The photo of one refused punch attempt (JPEG, 057)',
+    description:
+      'Same audience as the refusal log — **write** on attendance. Kept for the refusal retention ' +
+      'period (30 days by default) and 404 after the sweep deletes it; the log row stays.',
+  })
+  async refusalPhoto(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ) {
+    const buffer = await this.refusals.photo(
+      callerFrom(user, request).rls,
+      this.companyOf(user, companyId),
+      id,
+    );
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buffer);
   }
 }

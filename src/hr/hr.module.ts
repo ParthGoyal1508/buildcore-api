@@ -50,6 +50,7 @@ import { ExitCustodyRegistry } from './offboarding/exit-custody.registry';
 import { LocationAssignmentsController } from './location-assignments/location-assignments.controller';
 import { LocationAssignmentsService } from './location-assignments/location-assignments.service';
 import { PunchRefusalsService } from './punch/punch-refusals.service';
+import { PunchPhotoRetentionCron } from './punch/punch-photo-retention.cron';
 import { SalaryRevisionsController } from './salary-revisions/salary-revisions.controller';
 import { SalaryRevisionsService } from './salary-revisions/salary-revisions.service';
 import { LettersModule } from '../letters/letters.module';
@@ -117,6 +118,7 @@ import { EmployeeLetterSource } from './employees/employee-letter-source';
     LeaveCreditCron,
     EmployeeLetterSource,
     PunchRefusalsService,
+    PunchPhotoRetentionCron,
     LocationAssignmentsService,
     ExitCustodyRegistry,
     ExitClearanceService,

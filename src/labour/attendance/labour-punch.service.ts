@@ -26,7 +26,10 @@ import { ImageProcessingService } from '../../hr/biometrics/image-processing.ser
 import { decodePhotoPayload } from '../../hr/biometrics/photo-payload';
 import { zonedDateOnly } from '../../hr/leave/leave-days';
 import { checkGeofence } from '../../hr/punch/geofence.util';
-import { LABOUR_PUNCH_NAMESPACE } from '../constants/labour.constants';
+import {
+  LABOUR_PUNCH_NAMESPACE,
+  LABOUR_PUNCH_REFUSAL_NAMESPACE,
+} from '../constants/labour.constants';
 import { LabourRefsService } from '../labour-refs.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
 import { parseDateOnly } from '../wage-rates/wage-rate.service';
@@ -239,7 +242,33 @@ export class LabourPunchService {
       type: r.type,
       reason: r.reason,
       at: r.createdAt.toISOString(),
+      // 057: the evidence, for whoever reviews the attempt. The storage key stays on the server.
+      latitude: r.latitude.toNumber(),
+      longitude: r.longitude.toNumber(),
+      distanceMetres: r.distanceMetres?.toNumber() ?? null,
+      accuracyMetres: r.accuracyMetres?.toNumber() ?? null,
+      faceMatchDistance: r.faceMatchDistance?.toNumber() ?? null,
+      hasPhoto: r.photoRef !== null,
     }));
+  }
+
+  /**
+   * The photo of one refused labour attempt (057), at a site the caller may see. 404 once the
+   * retention sweep has deleted it — the log row stays.
+   */
+  async refusalPhoto(caller: AuthenticatedUser, id: string): Promise<Buffer> {
+    const row = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.labourPunchRefusal.findFirst({
+        where: { id },
+        select: { siteId: true, photoRef: true },
+      }),
+    );
+    if (!row) throw new NotFoundException('Refused attempt not found');
+    await this.supervisorSites.assertSiteAllowed(caller, row.siteId);
+    if (!row.photoRef) {
+      throw new NotFoundException('No photo is held for this refused attempt.');
+    }
+    return this.storage.get(row.photoRef);
   }
 
   async punch(
@@ -349,6 +378,12 @@ export class LabourPunchService {
       : false;
     const refusal = enforced && locationReason ? locationReason : faceReason;
     if (refusal) {
+      // 057: the refused photo is kept with the log row, for an administrator to see who was in
+      // front of the camera; the retention sweep deletes it after the refusal period. A failed
+      // upload costs the evidence, not the refusal.
+      const refusalPhotoRef = await this.storage
+        .put(LABOUR_PUNCH_REFUSAL_NAMESPACE, compressed, 'image/jpeg')
+        .catch(() => null);
       await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
         tx.labourPunchRefusal.create({
           data: {
@@ -363,9 +398,16 @@ export class LabourPunchService {
             accuracyMetres: dto.accuracyMeters ?? null,
             distanceMetres: distanceMeters,
             faceMatchDistance: match?.distance ?? null,
+            photoRef: refusalPhotoRef,
           },
         }),
-      );
+      ).catch(async (error: unknown) => {
+        // Stored for this row alone; without the row nothing would ever delete it.
+        if (refusalPhotoRef) {
+          await this.storage.delete(refusalPhotoRef).catch(() => undefined);
+        }
+        throw error;
+      });
       throw labourPunchRefused(refusal, {
         distanceMeters: unlocatable ? undefined : distanceMeters,
         allowedMeters:
@@ -376,7 +418,7 @@ export class LabourPunchService {
       });
     }
 
-    // Stored only once accepted: a refused photo would be an orphan nothing references.
+    // The punch's own photo, stored only once accepted (a refused one went to the refusal row).
     const photoRef = await this.storage.put(
       LABOUR_PUNCH_NAMESPACE,
       compressed,

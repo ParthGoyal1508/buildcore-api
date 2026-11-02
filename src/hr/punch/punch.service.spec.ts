@@ -475,7 +475,7 @@ describe('PunchService', () => {
         });
       });
 
-      it('writes no attendance row and no photo when it refuses', async () => {
+      it('writes no attendance row, and keeps the photo only with the refusal', async () => {
         /**
          * **FR-013d, asserted structurally.** This is what makes the seven-reader audit in T022
          * finite rather than perpetual: payroll, the admin daily and monthly views, the employee's
@@ -484,11 +484,13 @@ describe('PunchService', () => {
          * punch in every one of them — including the reader somebody writes next year without being
          * told refusals exist.
          *
-         * The photo matters as much as the row. `storage.put` happens before the day lock, so a
-         * refusal thrown one line later would leave a blob whose only referent was the row that was
-         * never created — an orphan nothing can collect, because nothing knows it is there.
+         * The photo (057): a refused attempt keeps its picture for review, but only under the
+         * refusal namespace and only on the refusal row — never as an attendance photo, which would
+         * be a blob whose only referent was a row that was never created.
          */
-        const { service, created, storage, prisma } = build({ enforced: true });
+        const { service, created, storage, prisma, refusals } = build({
+          enforced: true,
+        });
 
         await expect(
           service.submitPunch(caller, punchDto(FAR)),
@@ -496,7 +498,19 @@ describe('PunchService', () => {
 
         expect(created).toHaveLength(0);
         expect(prisma.tx.punchRecord.create).not.toHaveBeenCalled();
-        expect(storage.put).not.toHaveBeenCalled();
+        expect(storage.put).toHaveBeenCalledTimes(1);
+        expect(storage.put.mock.calls[0][0]).toBe('punch-refusal');
+        expect(refusals.record.mock.calls[0][1].photoRef).toBe('punch/ref-1');
+      });
+
+      it('keeps no refusal photo while the block is off — the accepted punch has its own', async () => {
+        const { service, storage, refusals } = build({ enforced: false });
+
+        await service.submitPunch(caller, punchDto(FAR));
+
+        expect(storage.put).toHaveBeenCalledTimes(1);
+        expect(storage.put.mock.calls[0][0]).toBe('punch');
+        expect(refusals.record.mock.calls[0][1].photoRef).toBeNull();
       });
 
       it('logs the refusal before refusing, so the attempt leaves a trace', async () => {
