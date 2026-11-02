@@ -351,12 +351,6 @@ const config: Config = {
         7,
       ),
     },
-    photoRetention: {
-      punchPhotoDays: numberFromEnv(
-        process.env.WORKSPACE_PUNCH_PHOTO_RETENTION_DAYS,
-        15,
-      ),
-    },
     imageProcessing: {
       // Enrolment photos feed descriptor computation, so they keep more detail.
       enrolment: {
@@ -395,6 +389,33 @@ const config: Config = {
           72,
         ),
       },
+    },
+    liveness: {
+      challengeTtlSeconds: numberFromEnv(
+        process.env.WORKSPACE_LIVENESS_CHALLENGE_TTL_SECONDS,
+        120,
+      ),
+      // A slight three-quarter turn measures ~0.15–0.17 (057, measured on reference portraits);
+      // a flat photo turned or tilted stays near 0, because a plane cannot move its nose.
+      minTurn: numberFromEnv(process.env.WORKSPACE_LIVENESS_MIN_TURN, 0.12),
+      // Above the models' own decision point (0.5, the real class winning the summed softmax):
+      // a phone photo held to a laptop webcam scored 0.59 and a live face 0.999 (057, first local
+      // test), so 0.5 let the photo through on this check alone. Every punch records its score,
+      // for tuning on site devices.
+      minRealScore: numberFromEnv(
+        process.env.WORKSPACE_LIVENESS_MIN_REAL_SCORE,
+        0.8,
+      ),
+    },
+    photoRetention: {
+      punchDays: numberFromEnv(
+        process.env.WORKSPACE_PUNCH_PHOTO_RETENTION_DAYS,
+        14,
+      ),
+      refusalDays: numberFromEnv(
+        process.env.WORKSPACE_REFUSAL_PHOTO_RETENTION_DAYS,
+        30,
+      ),
     },
     labour: {
       // 013 FR-013. A muster fix worse than this many metres is flagged for review
@@ -591,7 +612,8 @@ const config: Config = {
     driver: (process.env.EMAIL_DRIVER as 'console' | 'resend') || 'console',
     apiKey: process.env.RESEND_API_KEY,
     fromAddress:
-      process.env.EMAIL_FROM_ADDRESS || 'Tirupati Groups <onboarding@resend.dev>',
+      process.env.EMAIL_FROM_ADDRESS ||
+      'Tirupati Groups <onboarding@resend.dev>',
     // Where the set-password link points. Defaults to the local frontend port.
     appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:3001',
     // Off unless a deployment explicitly asks for it — see the interface comment.

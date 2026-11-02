@@ -51,7 +51,7 @@ const RULE = '#9AA7B5';
 
 const ROW = 16;
 const PAD = 4;
-const TYPE = 8.5;
+const TYPE = 9;
 const COLUMN_GAP = 8;
 
 const DASH = '—';
@@ -500,8 +500,9 @@ export class SalaryPdfService {
   }
 
   /**
-   * The docx's header: the company's name centred in navy, its logo at the right. Returns where the
-   * payslip itself begins. A missing or unreadable logo leaves the name alone.
+   * The docx's header: the company's name centred in navy, its logo at the right; since 055 a bigger
+   * logo and name, with the offices, email and website centred beneath. Returns where the payslip
+   * itself begins. A missing or unreadable logo leaves the name alone.
    */
   private header(
     doc: Doc,
@@ -517,7 +518,7 @@ export class SalaryPdfService {
             openImage(b: Buffer): { width: number; height: number };
           }
         ).openImage(logo);
-        const scale = Math.min(110 / image.width, 44 / image.height);
+        const scale = Math.min(150 / image.width, 64 / image.height);
         const width = image.width * scale;
         const height = image.height * scale;
         // The decoded image, not the bytes: pdfkit would decode and embed them a second time.
@@ -533,15 +534,35 @@ export class SalaryPdfService {
     if (identity.companyName) {
       doc
         .font('Helvetica-Bold')
-        .fontSize(15)
+        .fontSize(17)
         .fillColor(NAVY)
-        .text(identity.companyName, MARGIN.left + 120, top + 12, {
-          width: CONTENT_WIDTH - 240,
+        .text(identity.companyName, MARGIN.left + 160, top + 14, {
+          width: CONTENT_WIDTH - 320,
           align: 'center',
         });
       bottom = Math.max(bottom, doc.y);
     }
-    return Math.max(bottom, top + 30) + 16;
+    let y = Math.max(bottom, top + 30) + 6;
+    const lines = identity.companyLines ?? [];
+    if (lines.length) {
+      doc.font('Helvetica').fontSize(8.5).fillColor('#222222');
+      for (const line of lines) {
+        doc.text(line, MARGIN.left, y, {
+          width: CONTENT_WIDTH,
+          align: 'center',
+        });
+        y = doc.y + 1;
+      }
+      doc
+        .lineWidth(0.8)
+        .strokeColor(NAVY)
+        .moveTo(MARGIN.left, y + 4)
+        .lineTo(MARGIN.left + CONTENT_WIDTH, y + 4)
+        .stroke();
+      doc.fillColor('#000000');
+      y += 4;
+    }
+    return y + 12;
   }
 
   /** A section title in navy bold, as the docx sets "EARNINGS / ALLOWANCES". Returns the y below. */

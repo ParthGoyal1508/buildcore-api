@@ -14,7 +14,6 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 export class LabourPunchDto {
   @ApiProperty()
@@ -34,18 +33,23 @@ export class LabourPunchDto {
   type!: LabourPunchType;
 
   @ApiProperty({
-    description: 'Base64-encoded photo (data-URL prefix optional).',
+    description:
+      'The liveness challenge this capture followed (057, flow `labour-punch` for this workerId). ' +
+      'The photos are the multipart `frames`, in its step order.',
   })
   @IsString()
   @IsNotEmpty()
-  @IsBase64Payload()
-  photo!: string;
+  @MaxLength(64)
+  challengeId!: string;
 
+  // Multipart fields arrive as text (057).
   @ApiProperty({ example: 19.076 })
+  @Type(() => Number)
   @IsLatitude()
   latitude!: number;
 
   @ApiProperty({ example: 72.8777 })
+  @Type(() => Number)
   @IsLongitude()
   longitude!: number;
 
@@ -54,6 +58,7 @@ export class LabourPunchDto {
       'GPS accuracy radius in metres, judged exactly as an employee punch is (020 FR-012a).',
   })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   @Max(10_000)

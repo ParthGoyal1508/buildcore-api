@@ -32,7 +32,10 @@ import {
   NoFaceDetectedError,
 } from '../../hr/biometrics/biometrics.service';
 import { ImageProcessingService } from '../../hr/biometrics/image-processing.service';
-import { decodePhotoPayload } from '../../hr/biometrics/photo-payload';
+import {
+  LivenessService,
+  livenessSubject,
+} from '../../hr/biometrics/liveness.service';
 import { zonedDateOnly } from '../../hr/leave/leave-days';
 import {
   DEFAULT_PAGE_SIZE,
@@ -106,6 +109,7 @@ export class LabourWorkerService {
     private readonly images: ImageProcessingService,
     private readonly supervisorSites: SupervisorSiteService,
     private readonly nocs: NocsService,
+    private readonly liveness: LivenessService,
   ) {}
 
   private toListItem(
@@ -307,7 +311,7 @@ export class LabourWorkerService {
       fatherName?: string;
       phone?: string;
       siteId: string;
-      photos?: string[];
+      challengeId?: string;
       dateOfBirth?: string;
       skillCategoryId?: string;
       engagementType?: EngagementType;
@@ -317,8 +321,15 @@ export class LabourWorkerService {
       rateOverride?: number;
     },
     ipAddress: string,
+    /** The face capture (057), with `dto.challengeId`; empty when registering without a face. */
+    frames: Buffer[] = [],
   ): Promise<WorkerListItem> {
     const companyId = resolveCompanyId(caller, dto.companyId);
+    if (frames.length > 0 && !dto.challengeId) {
+      throw new BadRequestException(
+        'Face photos must come with the liveness challenge they were captured for.',
+      );
+    }
     if (dto.rateOverride !== undefined && dto.rateOverride !== null) {
       this.assertMaySetRate(caller);
     }
@@ -351,9 +362,10 @@ export class LabourWorkerService {
       await this.refs.requireSkillCategory(caller, dto.skillCategoryId);
     }
 
-    const faceEnrolmentId = dto.photos
-      ? await this.storeFaceTemplate(dto.photos)
-      : null;
+    const faceEnrolmentId =
+      dto.challengeId && frames.length > 0
+        ? await this.storeFaceTemplate(caller, dto.challengeId, frames)
+        : null;
 
     let created;
     try {
@@ -715,7 +727,8 @@ export class LabourWorkerService {
   async enrolFace(
     caller: AuthenticatedUser,
     id: string,
-    photos: string[],
+    challengeId: string,
+    frames: Buffer[],
     ipAddress: string,
   ): Promise<{ faceEnrolled: true }> {
     const worker = await withRlsContext(
@@ -730,7 +743,7 @@ export class LabourWorkerService {
 
     await this.supervisorSites.assertSiteAllowed(caller, worker.siteId);
 
-    const ref = await this.storeFaceTemplate(photos);
+    const ref = await this.storeFaceTemplate(caller, challengeId, frames);
     await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
       tx.labourWorker.update({
         where: { id },
@@ -775,12 +788,20 @@ export class LabourWorkerService {
   }
 
   /**
-   * Builds the averaged face template from 3–5 photos and stores it encrypted, returning its ref.
-   * Every photo must show a detectable face; the descriptor computation rejects one that does not.
+   * Builds the averaged face template from a liveness capture and stores it encrypted, returning
+   * its ref. The capture must show a live person first (057): registering a labour from a photo
+   * would let that photo punch them in every day.
    */
-  private async storeFaceTemplate(photos: string[]): Promise<string> {
-    const decoded = photos.map((p, i) =>
-      decodePhotoPayload(p, `Face photo ${i + 1}`),
+  private async storeFaceTemplate(
+    caller: AuthenticatedUser,
+    challengeId: string,
+    decoded: Buffer[],
+  ): Promise<string> {
+    await this.liveness.assertLive(
+      challengeId,
+      livenessSubject(caller.id, 'labour-enrolment'),
+      decoded,
+      { subject: "the labour's", noFaceCode: 'LABOUR_FACE_NOT_DETECTED' },
     );
     const compressed = await Promise.all(
       decoded.map((photo) => this.images.compressEnrolmentPhoto(photo)),

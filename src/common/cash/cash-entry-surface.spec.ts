@@ -130,7 +130,9 @@ function isAllowed(line: string): boolean {
     file === 'src/inventory/payments/cash-hiding.spec.ts' ||
     file === 'src/dashboard/activity-log/cash-entries.ts' ||
     file === 'src/plant/disposal/equipment-disposal.service.spec.ts' ||
-    file === 'src/plant/maintenance/job-card-flow.service.spec.ts'
+    file === 'src/plant/maintenance/job-card-flow.service.spec.ts' ||
+    // 054: the dashboard's Labour card leaving hidden cash lines out of wages owed.
+    file === 'src/labour/wages-owed.spec.ts'
   )
     return true;
   const trimmed = code.trim();

@@ -14,6 +14,7 @@ import {
   euclideanDistance,
 } from '../biometrics/biometrics.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
+import type { LivenessFailure } from '../biometrics/liveness.service';
 import { PunchService } from './punch.service';
 
 const JPEG_BASE64 =
@@ -40,7 +41,15 @@ class FakeBiometrics extends BiometricsService {
     const distance = euclideanDistance(a, b);
     return { matched: distance <= 0.6, distance };
   }
+  async analyse() {
+    return this.next
+      ? { descriptor: this.next, yaw: 0, realScore: 0.99 }
+      : null;
+  }
 }
+
+/** A punch's capture (057): straight, left, right. What they show is the liveness double's say. */
+const FRAMES = [0, 1, 2].map(() => Buffer.from(JPEG_BASE64, 'base64'));
 
 const SITE = {
   siteId: 'site-1',
@@ -94,6 +103,8 @@ describe('PunchService', () => {
        * exercising the site fence.
        */
       assignment?: { siteId: string | null; isMobile: boolean };
+      /** 057: a liveness check that fails, as the liveness double reports it. */
+      livenessFailure?: LivenessFailure;
       /**
        * Whether the company refuses a failing punch rather than flagging it (020 FR-013).
        *
@@ -159,6 +170,24 @@ describe('PunchService', () => {
     // Hoisted so a test can close the site: `isActive` is the fact 008 stored and nothing read.
     const sites = { getGeofence: jest.fn().mockResolvedValue(SITE) };
     const storage = { put: jest.fn().mockResolvedValue('punch/ref-1') };
+    // 057: the challenge is spent and the frames judged; the verdict follows the fake face, plus an
+    // optional failed liveness check. The checks themselves are covered in liveness.service.spec.
+    const liveness = {
+      consume: jest.fn().mockResolvedValue(['straight', 'left', 'right']),
+      judge: jest.fn(async () => {
+        const straight = biometrics.next
+          ? { descriptor: biometrics.next, yaw: 0, realScore: 0.99 }
+          : null;
+        return {
+          analyses: [straight],
+          straight,
+          realScore: straight ? 0.99 : null,
+          failure: !straight
+            ? { kind: 'no_face', step: 'straight' }
+            : opts.livenessFailure ?? null,
+        };
+      }),
+    };
     const service = new PunchService(
       // 020 FR-013c. Phase 2 records would-be refusals while still accepting the punch, so these
       // tests' outcomes are unchanged — the double only needs to absorb the call.
@@ -185,6 +214,7 @@ describe('PunchService', () => {
         isPunchBlockEnforced: jest.fn().mockResolvedValue(enforced),
       } as never,
       biometrics,
+      liveness as never,
       { compressPunchPhoto: jest.fn(async (b: Buffer) => b) } as never,
       storage as never,
       { record: jest.fn().mockResolvedValue(undefined) } as never,
@@ -208,13 +238,31 @@ describe('PunchService', () => {
               },
       } as never,
     );
-    return { service, prisma, created, approvals, refusals, storage, sites };
+    // Every existing case punches with a passing capture; the liveness cases set `livenessFailure`.
+    const submit = service.submitPunch.bind(service);
+    const withCapture = Object.assign(service, {
+      submitPunch: (
+        c: Parameters<PunchService['submitPunch']>[0],
+        d: Parameters<PunchService['submitPunch']>[1],
+        frames: Buffer[] = FRAMES,
+      ) => submit(c, d, frames),
+    });
+    return {
+      service: withCapture,
+      prisma,
+      created,
+      approvals,
+      refusals,
+      storage,
+      sites,
+      liveness,
+    };
   };
 
   const punchDto = (overrides: Record<string, unknown> = {}) =>
     ({
       type: PunchType.in,
-      photo: JPEG_BASE64,
+      challengeId: 'challenge-1',
       latitude: SITE.latitude,
       longitude: SITE.longitude,
       capturedAt: new Date().toISOString(),
@@ -435,6 +483,60 @@ describe('PunchService', () => {
         });
       });
 
+      // 057: a capture that is not a live person — a photo held up to the camera — is refused.
+      it('refuses a capture whose head did not turn, saying so, and writes no attendance', async () => {
+        const { service, created, refusals } = build({
+          enforced: true,
+          livenessFailure: { kind: 'did_not_turn', step: 'left' },
+        });
+
+        await expect(
+          service.submitPunch(caller, punchDto()),
+        ).rejects.toMatchObject({
+          status: 422,
+          response: {
+            code: 'PUNCH_REFUSED_LIVENESS',
+            reason: 'liveness_failed',
+            message: expect.stringContaining('did not turn to the left'),
+          },
+        });
+        expect(created).toHaveLength(0);
+        expect(refusals.record.mock.calls[0][1]).toMatchObject({
+          reason: 'liveness_failed',
+          livenessFailure: 'did_not_turn',
+          livenessScore: 0.99,
+        });
+      });
+
+      it('reports liveness before a face mismatch — the true reason for a held-up photo', async () => {
+        const { service } = build({
+          enforced: true,
+          livenessFailure: { kind: 'spoof' },
+        });
+        // A stranger's face: the match fails too, and the refusal still names liveness.
+        biometrics.next = Float32Array.from(
+          { length: FACE_DESCRIPTOR_LENGTH },
+          () => 5,
+        );
+
+        await expect(
+          service.submitPunch(caller, punchDto()),
+        ).rejects.toMatchObject({
+          response: { code: 'PUNCH_REFUSED_LIVENESS' },
+        });
+      });
+
+      it('spends the challenge as this employee, for a staff punch', async () => {
+        const { service, liveness } = build({ enforced: true });
+
+        await service.submitPunch(caller, punchDto());
+
+        expect(liveness.consume).toHaveBeenCalledWith(
+          'challenge-1',
+          'user-1:staff-punch:',
+        );
+      });
+
       it('distinguishes an unlocatable punch from one outside the fence', async () => {
         // The distinction FR-013b exists for. Collapsing these two into one code tells a worker
         // standing in exactly the right place to go somewhere else — so this asserts the code, not
@@ -475,7 +577,7 @@ describe('PunchService', () => {
         });
       });
 
-      it('writes no attendance row and no photo when it refuses', async () => {
+      it('writes no attendance row, and keeps the photo only with the refusal', async () => {
         /**
          * **FR-013d, asserted structurally.** This is what makes the seven-reader audit in T022
          * finite rather than perpetual: payroll, the admin daily and monthly views, the employee's
@@ -484,11 +586,13 @@ describe('PunchService', () => {
          * punch in every one of them — including the reader somebody writes next year without being
          * told refusals exist.
          *
-         * The photo matters as much as the row. `storage.put` happens before the day lock, so a
-         * refusal thrown one line later would leave a blob whose only referent was the row that was
-         * never created — an orphan nothing can collect, because nothing knows it is there.
+         * The photo (057): a refused attempt keeps its picture for review, but only under the
+         * refusal namespace and only on the refusal row — never as an attendance photo, which would
+         * be a blob whose only referent was a row that was never created.
          */
-        const { service, created, storage, prisma } = build({ enforced: true });
+        const { service, created, storage, prisma, refusals } = build({
+          enforced: true,
+        });
 
         await expect(
           service.submitPunch(caller, punchDto(FAR)),
@@ -496,7 +600,19 @@ describe('PunchService', () => {
 
         expect(created).toHaveLength(0);
         expect(prisma.tx.punchRecord.create).not.toHaveBeenCalled();
-        expect(storage.put).not.toHaveBeenCalled();
+        expect(storage.put).toHaveBeenCalledTimes(1);
+        expect(storage.put.mock.calls[0][0]).toBe('punch-refusal');
+        expect(refusals.record.mock.calls[0][1].photoRef).toBe('punch/ref-1');
+      });
+
+      it('keeps no refusal photo while the block is off — the accepted punch has its own', async () => {
+        const { service, storage, refusals } = build({ enforced: false });
+
+        await service.submitPunch(caller, punchDto(FAR));
+
+        expect(storage.put).toHaveBeenCalledTimes(1);
+        expect(storage.put.mock.calls[0][0]).toBe('punch');
+        expect(refusals.record.mock.calls[0][1].photoRef).toBeNull();
       });
 
       it('logs the refusal before refusing, so the attempt leaves a trace', async () => {

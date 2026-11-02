@@ -28,6 +28,7 @@ import { LabourReportsService } from './reports/labour-reports.service';
 import { MonthlyWageRollupService } from './reports/monthly-wage-rollup.service';
 import { LabourPunchController } from './attendance/labour-punch.controller';
 import { LabourPunchService } from './attendance/labour-punch.service';
+import { LabourPhotoRetentionCron } from './attendance/labour-photo-retention.cron';
 import { LabourDayService } from './attendance/labour-day.service';
 import { MusterAttendanceController } from './attendance/muster-attendance.controller';
 import { MusterAttendanceService } from './attendance/muster-attendance.service';
@@ -97,6 +98,7 @@ import { LabourSheetsService } from './reports/labour-sheets.service';
     LabourReportsService,
     MonthlyWageRollupService,
     LabourPunchService,
+    LabourPhotoRetentionCron,
     SiteWageRateService,
     SupervisorSiteService,
     LabourSheetsService,

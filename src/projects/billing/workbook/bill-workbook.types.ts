@@ -1,3 +1,4 @@
+import type { CompanyHeader } from '../../../common/document-header/company-header';
 import type { DebitNoteView } from './debit-note-document';
 
 /**
@@ -144,6 +145,11 @@ export interface WorkbookMeasurementSheet {
 /** The whole package, as the renderer receives it. */
 export interface BillWorkbookView {
   header: WorkbookHeader;
+  /**
+   * The company band the PDF opens every page with (055): logo, name, offices, email, website.
+   * Read live at render, like the logo — not one of the frozen header columns.
+   */
+  brand?: CompanyHeader;
   abstract: WorkbookAbstract;
   schedule: WorkbookSchedule;
   /** **One per schedule line, including lines with nothing claimed** (FR-030, FR-030a). */

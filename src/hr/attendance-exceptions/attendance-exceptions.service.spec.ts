@@ -100,6 +100,7 @@ function harness(punchResolution: ExceptionResolution | null = 'pending') {
     prisma as never,
     approvals as never,
     auditLog as never,
+    {} as never,
   );
 
   return { service, prisma, approvals, auditLog, punch };

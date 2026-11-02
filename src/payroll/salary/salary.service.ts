@@ -30,6 +30,8 @@ export interface SlipIdentity {
   companyName: string;
   /** One block, newline-separated, as the sample prints it. */
   companyAddress: string | null;
+  /** The offices, email and website the slip's header prints under the name (055). */
+  companyLines?: string[];
   joiningDate: Date | null;
   designation: string | null;
   department: string | null;
@@ -393,6 +395,7 @@ export class SalaryService {
         [company?.address, company?.city, company?.state, company?.pinCode]
           .filter((part) => part?.trim())
           .join(', ') || null,
+      companyLines: company?.contactLines ?? [],
       joiningDate: employee.dateOfJoining,
       designation: designation?.name ?? null,
       department: department?.name ?? null,

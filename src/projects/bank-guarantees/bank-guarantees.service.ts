@@ -1250,6 +1250,7 @@ export class BankGuaranteesService {
         company: {
           name: identity.name,
           address: identity.address,
+          lines: identity.contactLines,
           logo: identity.logo,
         },
         title: `${identity.name.toUpperCase()} TENDER BG DETAILS`,

@@ -98,6 +98,8 @@ function build(
     get: (key: string) =>
       key === 'settings'
         ? { timezone: 'Asia/Kolkata' }
+        : key === 'workspace'
+        ? { photoRetention: { punchDays: 14, refusalDays: 30 } }
         : { attendanceImportMaxRows: 1000 },
   };
 
@@ -228,6 +230,69 @@ describe('AttendanceAdminService — effective status (FR-069, FR-070)', () => {
     const hasPunch = attendanceHistory.statusesForDate.mock.calls[0][4];
     expect(hasPunch('emp-1')).toBe(true);
     expect(hasPunch('emp-2')).toBe(false);
+  });
+
+  it('names the In and Out punches and whether each still has its photo (057)', async () => {
+    const { service } = build({
+      punches: [
+        punch({ id: 'p-in', photoRef: 'punch/p-in.jpg' }),
+        // Swept by retention, or entered by hand: the punch stays, the photo does not.
+        punch({
+          id: 'p-out',
+          type: PunchType.out,
+          capturedAt: new Date('2026-09-08T12:35:00.000Z'),
+          photoRef: null,
+        }),
+      ],
+      statuses: [
+        ['emp-1', 'present'],
+        ['emp-2', 'absent'],
+      ],
+    });
+
+    const [punched, absent] = await service.daily(CALLER, 'co-1', {
+      date: '2026-09-08',
+    } as never);
+
+    expect(punched).toMatchObject({
+      inPunchId: 'p-in',
+      inHasPhoto: true,
+      outPunchId: 'p-out',
+      outHasPhoto: false,
+    });
+    expect(absent).toMatchObject({
+      inPunchId: null,
+      inHasPhoto: false,
+      outPunchId: null,
+      outHasPhoto: false,
+    });
+  });
+
+  it('reports a photo past the 14 days as gone before the nightly sweep reaches it (057)', async () => {
+    jest.setSystemTime(new Date('2026-09-23T06:00:00.000Z'));
+    const { service } = build({
+      punches: [
+        punch({ id: 'p-in', photoRef: 'punch/p-in.jpg' }),
+        // The sweep keeps a photo whose exception is still being decided; so does the register.
+        punch({
+          id: 'p-out',
+          type: PunchType.out,
+          capturedAt: new Date('2026-09-08T12:35:00.000Z'),
+          photoRef: 'punch/p-out.jpg',
+          exceptionResolution: 'pending',
+        }),
+      ],
+      statuses: [
+        ['emp-1', 'present'],
+        ['emp-2', 'absent'],
+      ],
+    });
+
+    const [row] = await service.daily(CALLER, 'co-1', {
+      date: '2026-09-08',
+    } as never);
+
+    expect(row).toMatchObject({ inHasPhoto: false, outHasPhoto: true });
   });
 });
 
@@ -427,7 +492,12 @@ describe('AttendanceAdminService.modifications — the actor filter (FR-012d)', 
       { resolveSlot: jest.fn() } as never,
       { submit: jest.fn() } as never,
       { emit: jest.fn(), emitAsync: jest.fn() } as never,
-      { get: () => ({ timezone: 'Asia/Kolkata' }) } as never,
+      {
+        get: () => ({
+          timezone: 'Asia/Kolkata',
+          photoRetention: { punchDays: 14, refusalDays: 30 },
+        }),
+      } as never,
     );
 
   const caller = { userId: 'u-1', rls: { isSuperAdmin: true } } as never;
@@ -666,7 +736,12 @@ describe('AttendanceAdminService.modifications — naming the actor', () => {
       { resolveSlot: jest.fn() } as never,
       { submit: jest.fn() } as never,
       { emit: jest.fn(), emitAsync: jest.fn() } as never,
-      { get: () => ({ timezone: 'Asia/Kolkata' }) } as never,
+      {
+        get: () => ({
+          timezone: 'Asia/Kolkata',
+          photoRetention: { punchDays: 14, refusalDays: 30 },
+        }),
+      } as never,
     );
     return { service, seen };
   };

@@ -1,4 +1,9 @@
-import { ForbiddenException, HttpException, Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { AuditAction, AuditEntityType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
@@ -8,7 +13,11 @@ import {
   NoFaceDetectedError,
 } from '../hr/biometrics/biometrics.service';
 import { ImageProcessingService } from '../hr/biometrics/image-processing.service';
-import { decodePhotoPayload } from '../hr/biometrics/photo-payload';
+import {
+  LivenessService,
+  livenessMessage,
+  livenessSubject,
+} from '../hr/biometrics/liveness.service';
 import { AuditLogService } from './audit-log.service';
 import { AuthenticatedUser } from './authenticated-user';
 import {
@@ -28,8 +37,12 @@ export const FACE_UNLOCK_NOT_SET_UP = 'FACE_UNLOCK_NOT_SET_UP';
  * matcher — a browser cannot claim a match it did not get.
  *
  * Registering or removing the face itself needs a **password** confirmation: a face that passed
- * once (or a photo of it — the matcher does not test liveness) cannot re-register itself or lock
- * the owner out. A mismatch is audited as a failed sign-in but does not count toward the account
+ * once cannot re-register itself or lock the owner out.
+ *
+ * **Live faces only (057).** Registering and confirming both follow a server-issued head-turn
+ * challenge, judged as attendance judges a punch — the head turned as asked, the same person in
+ * every frame, and the anti-spoof models scoring it live — so a photo of the owner held up to the
+ * camera is refused. Before 057 one still frame was matched, and a photo would have passed. A mismatch is audited as a failed sign-in but does not count toward the account
  * lockout, so bad lighting cannot lock an administrator out of signing in; the controller's rate
  * limit bounds the guessing instead.
  */
@@ -41,6 +54,7 @@ export class FaceUnlockService {
     private readonly images: ImageProcessingService,
     private readonly confirmation: PasswordConfirmationService,
     private readonly audit: AuditLogService,
+    private readonly liveness: LivenessService,
   ) {}
 
   async status(
@@ -59,19 +73,25 @@ export class FaceUnlockService {
     caller: AuthenticatedUser,
     purpose: ConfirmationPurpose,
     token: string | string[] | undefined,
-    photos: string[],
+    challengeId: string,
+    frames: Buffer[],
     ipAddress: string,
   ): Promise<{ enrolled: boolean; enrolledAt: string | null }> {
     this.assertMayConfirm(caller, purpose);
+    // The password first: a capture is not spent on a request that was never going to be allowed.
     this.confirmation.assertConfirmed(token, caller.id, purpose, {
       passwordOnly: true,
     });
+    await this.liveness.assertLive(
+      challengeId,
+      livenessSubject(caller.id, 'unlock-enrolment'),
+      frames,
+      { subject: 'your', noFaceCode: 'NO_FACE' },
+    );
+    // Every frame of the capture goes into the template, as for attendance enrolment: the two slight
+    // turns give it the angles a confirmation will actually be taken at.
     const compressed = await Promise.all(
-      photos.map((photo, i) =>
-        this.images.compressEnrolmentPhoto(
-          decodePhotoPayload(photo, `Photo ${i + 1}`),
-        ),
-      ),
+      frames.map((frame) => this.images.compressEnrolmentPhoto(frame)),
     );
     let descriptor: Float32Array;
     try {
@@ -132,7 +152,8 @@ export class FaceUnlockService {
   async confirm(
     caller: AuthenticatedUser,
     purpose: ConfirmationPurpose,
-    photo: string,
+    challengeId: string,
+    frames: Buffer[],
     ipAddress: string,
   ): Promise<{ confirmationToken: string; expiresAt: string }> {
     this.assertMayConfirm(caller, purpose);
@@ -153,12 +174,27 @@ export class FaceUnlockService {
       });
     }
 
-    const candidate = await this.biometrics
-      .computeDescriptor([decodePhotoPayload(photo, 'Photo')])
-      .catch((error: unknown) => {
-        if (error instanceof NoFaceDetectedError) return null;
-        throw error;
+    const steps = await this.liveness.consume(
+      challengeId,
+      livenessSubject(caller.id, 'unlock-confirm'),
+    );
+    const { straight, failure } = await this.liveness.judge(steps, frames);
+    const noFace = failure?.kind === 'no_face' && failure.step === 'straight';
+
+    // Not a live person: refused before any match is attempted, and saying which check failed.
+    if (failure && !noFace) {
+      await this.recordFailure(caller, purpose, ipAddress, {
+        liveness: failure.kind,
       });
+      throw new UnprocessableEntityException({
+        code: 'LIVENESS_FAILED',
+        message: livenessMessage(failure, 'your'),
+        reason: failure.kind,
+        step: failure.step,
+      });
+    }
+
+    const candidate = noFace ? null : straight?.descriptor ?? null;
     const match = candidate
       ? this.biometrics.compareDescriptors(
           candidate,
@@ -167,15 +203,8 @@ export class FaceUnlockService {
       : null;
 
     if (!match?.matched) {
-      await this.audit.recordAuthEvent(AuditEntityType.LOGIN_FAILURE, {
-        accountId: caller.id,
-        companyId: caller.companyId,
-        ipAddress,
-        changes: {
-          event: 'face_confirmation_failed',
-          purpose,
-          distance: match?.distance ?? null,
-        },
+      await this.recordFailure(caller, purpose, ipAddress, {
+        distance: match?.distance ?? null,
       });
       throw new ForbiddenException({
         statusCode: 403,
@@ -210,6 +239,21 @@ export class FaceUnlockService {
           'Your role does not include the setting this confirmation is for.',
       });
     }
+  }
+
+  /** A failed face confirmation, audited as a failed sign-in (never counted toward the lockout). */
+  private recordFailure(
+    caller: AuthenticatedUser,
+    purpose: ConfirmationPurpose,
+    ipAddress: string,
+    detail: Record<string, string | number | null>,
+  ): Promise<void> {
+    return this.audit.recordAuthEvent(AuditEntityType.LOGIN_FAILURE, {
+      accountId: caller.id,
+      companyId: caller.companyId,
+      ipAddress,
+      changes: { event: 'face_confirmation_failed', purpose, ...detail },
+    });
   }
 
   private find(userId: string) {

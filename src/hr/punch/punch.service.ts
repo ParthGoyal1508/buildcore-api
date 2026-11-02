@@ -37,7 +37,10 @@ import { SitesService } from '../../projects/sites/sites.service';
 import { BiometricsService } from '../biometrics/biometrics.service';
 import { ImageProcessingService } from '../biometrics/image-processing.service';
 import { parseDateOnly, zonedDateOnly } from '../leave/leave-days';
-import { decodePhotoPayload } from '../biometrics/photo-payload';
+import {
+  LivenessService,
+  livenessSubject,
+} from '../biometrics/liveness.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import { EmployeeDocumentsService } from '../employees/documents/employee-documents.service';
 import { EmployeesService } from '../employees/employees.service';
@@ -50,6 +53,8 @@ import { isPayrollLocked } from './payroll-lock';
 import { webRoutes } from '../../common/web-routes';
 
 const PUNCH_NAMESPACE = 'punch';
+/** A refused attempt's photo (057) — its own namespace, so the two retention periods never mix. */
+export const PUNCH_REFUSAL_NAMESPACE = 'punch-refusal';
 
 /**
  * HTTP 423 Locked — the contract's status for a write into a closed payroll period.
@@ -120,6 +125,7 @@ export class PunchService {
     private readonly sites: SitesService,
     private readonly companies: CompaniesService,
     private readonly biometrics: BiometricsService,
+    private readonly liveness: LivenessService,
     private readonly images: ImageProcessingService,
     private readonly storage: StorageService,
     private readonly auditLog: AuditLogService,
@@ -172,7 +178,12 @@ export class PunchService {
     };
   }
 
-  async submitPunch(caller: Caller, dto: SubmitPunchDto): Promise<PunchResult> {
+  async submitPunch(
+    caller: Caller,
+    dto: SubmitPunchDto,
+    /** The liveness capture (057), in the challenge's step order. */
+    frames: Buffer[],
+  ): Promise<PunchResult> {
     const employee = await this.employees.requireByUserId(
       caller.rls,
       caller.userId,
@@ -286,7 +297,15 @@ export class PunchService {
     // true for a year and is the first thing a reader of this method learns. It is rewritten in the
     // same commit as the refusal, because a comment that survives the change it describes is worse
     // than no comment: it is believed. ---
-    const photoBytes = decodePhotoPayload(dto.photo, 'Punch photo');
+    //
+    // 057: the capture is a liveness challenge's frames. The challenge is spent here, once, whatever
+    // the outcome — a refused attempt starts again with a fresh one, so a capture cannot be replayed.
+    const steps = await this.liveness.consume(
+      dto.challengeId,
+      livenessSubject(caller.userId, 'staff-punch'),
+    );
+    // The straight frame is the punch's photo: the one matched against the template and stored.
+    const photoBytes = frames[steps.indexOf('straight')] ?? frames[0];
 
     // The calendar day this punch counts for — the employee's, not the server's (FR-018a).
     // Computed **here**, before the fence is resolved, because 020 FR-016's per-employee
@@ -300,14 +319,12 @@ export class PunchService {
     // The face is computed from the photo as uploaded rather than from the compressed copy —
     // the matcher downscales on its own, and waiting for the re-encode only delayed it. Every
     // check below still runs in the order it always has; only the waiting overlaps.
-    const [compressed, candidate, { assignment, geofence }, accuracyMax] =
+    const [compressed, judgement, { assignment, geofence }, accuracyMax] =
       await Promise.all([
         this.images.compressPunchPhoto(photoBytes),
-        this.biometrics
-          .computeDescriptor([photoBytes])
-          // A photo with no detectable face is an exception for an admin to look at,
-          // not a 400 — the worker is presumably standing there regardless.
-          .catch(() => null),
+        // 057: every frame analysed once — face, head turn and anti-spoof score — on the worker.
+        // A failed check is a verdict, not an error; only a malformed capture throws.
+        this.liveness.judge(steps, frames),
         // 020 FR-011, FR-016. No assignment → the employee's own site fence, exactly as
         // before. That is every employee on the day this ships, which is why this table can
         // be introduced with no backfill and refuse nobody.
@@ -330,14 +347,30 @@ export class PunchService {
         this.companies.getPunchAccuracyMaxMetres(employee.companyId),
       ]);
 
+    // No face in the straight frame keeps its own reason (`no_face_detected`); every other failed
+    // liveness check is `liveness_failed`, with which check in the refusal's detail.
+    const candidate = judgement.straight?.descriptor ?? null;
+    const livenessFailure =
+      judgement.failure &&
+      !(
+        judgement.failure.kind === 'no_face' &&
+        judgement.failure.step === 'straight'
+      )
+        ? judgement.failure
+        : null;
+    const livenessScore = judgement.realScore;
+
     const stored = this.biometrics.deserializeDescriptor(enrolment.descriptor);
     let faceMatchResult: FaceMatchResult = FaceMatchResult.exception;
     let faceMatchDistance: number | null = null;
     if (candidate) {
       const match = this.biometrics.compareDescriptors(candidate, stored);
-      faceMatchResult = match.matched
-        ? FaceMatchResult.matched
-        : FaceMatchResult.exception;
+      // A capture that is not a live person is not a face match, whatever the distance — which is
+      // what flags it, too, on a company that has the block switched off.
+      faceMatchResult =
+        match.matched && !livenessFailure
+          ? FaceMatchResult.matched
+          : FaceMatchResult.exception;
       faceMatchDistance = match.distance;
     }
 
@@ -417,19 +450,36 @@ export class PunchService {
         // the worker is presumably standing there regardless — and under the block it becomes a
         // refusal for the same reason: it is a failed check, not a malformed request.
         PunchRefusalReason.no_face_detected
+      : livenessFailure
+      ? // 057. Before a mismatch: a picture of the right person matches, and the worker is owed
+        // the reason that is actually true — that it was not a live face.
+        PunchRefusalReason.liveness_failed
       : PunchRefusalReason.face_mismatch;
+
+    // Read before the refusal is logged (057), because whether the attempt is refused decides
+    // whether its photo is kept with the log row: a refused attempt has no other record, while a
+    // would-be refusal under a disabled block is an accepted punch that keeps its own photo.
+    const enforced = refusalReason
+      ? await this.companies.isPunchBlockEnforced(employee.companyId)
+      : false;
 
     // 020 FR-013c. Recorded whether or not the block is on, and in the same shape either way.
     //
     // While `punchBlockEnforced` is false the punch is **still accepted** and this is the measured
-    // rate at which the block would fire — the figure the client is owed before it does. Once it is
-    // true this is the only trace the attempt happened at all, because FR-013d writes nothing to
-    // attendance. One table serving both is what makes a fortnight of would-be refusals directly
-    // comparable with a fortnight of real ones.
+    // rate at which the block would fire. Once it is true this is the only trace the attempt
+    // happened at all, because FR-013d writes nothing to attendance — which is why, since 057, a
+    // refused attempt keeps its photo here (under its own namespace, for the shorter-lived refusal
+    // retention) so an administrator can see who was in front of the camera.
     //
     // Awaited but non-throwing: neither an accepted punch nor a considered refusal may become a 500
-    // because a log write failed.
+    // because a log or photo write failed. `record` deletes the photo itself if the row is not
+    // written, so a failed log never leaves an orphan in storage.
     if (refusalReason) {
+      const refusalPhotoRef = enforced
+        ? await this.storage
+            .put(PUNCH_REFUSAL_NAMESPACE, compressed, 'image/jpeg')
+            .catch(() => null)
+        : null;
       await this.punchRefusals.record(caller.rls, {
         companyId: employee.companyId,
         employeeId: employee.id,
@@ -441,21 +491,22 @@ export class PunchService {
         accuracyMeters: dto.accuracyMeters ?? null,
         faceMatchDistance,
         capturedAt,
+        photoRef: refusalPhotoRef,
+        livenessScore,
+        livenessFailure: livenessFailure?.kind ?? null,
       });
     }
 
     /**
      * 020 FR-013. The inversion, where the company has switched it on.
      *
-     * **Thrown here and not a line later.** Everything that follows this point writes something:
-     * the photo goes to object storage, then the day is locked `FOR UPDATE`, then the row is
-     * inserted. A refusal thrown after the `put` leaves a blob in storage whose only referent was
-     * the row that was never created — an orphan nothing will ever collect, because nothing knows
-     * it exists. Ordering is the whole requirement; the condition is the easy part.
+     * **Thrown here and not a line later.** Everything that follows this point writes attendance:
+     * the punch photo goes to object storage, then the day is locked `FOR UPDATE`, then the row is
+     * inserted. A refusal thrown after the punch `put` would leave a blob whose only referent was a
+     * row never created. (The refusal's own photo, above, belongs to the refusal row.)
      *
      * Read per company and per request, so the client's answer is a settings change rather than a
-     * release, and reversible the same way. Read **after** the refusal has been logged, so turning
-     * the block on does not change what is measured — only who is turned away.
+     * release, and reversible the same way.
      *
      * A refused punch-out can leave the day holding a punch-in nothing will close
      * (checklists/refusal.md CHK031). That is accepted rather than worked around: FR-008a already
@@ -463,13 +514,18 @@ export class PunchService {
      * route back. Closing it automatically here would mean writing to attendance on the refusal
      * path, which FR-013d forbids outright.
      */
-    if (refusalReason) {
-      const enforced = await this.companies.isPunchBlockEnforced(
-        employee.companyId,
-      );
-      if (enforced) {
-        throw punchRefusedException(refusalReason);
-      }
+    if (refusalReason && enforced) {
+      throw punchRefusedException(refusalReason, {
+        // An unlocatable fix gets no distance: it is measured from a position nobody trusts.
+        distanceMeters: unlocatable ? undefined : distanceMeters,
+        // The same fence `checkGeofence` judged against — radius plus the accuracy allowance.
+        allowedMeters:
+          geofence.geofenceRadiusMeters +
+          (unlocatable ? 0 : dto.accuracyMeters ?? 0),
+        accuracyMeters: dto.accuracyMeters,
+        accuracyMaxMeters: accuracyMax,
+        liveness: livenessFailure ?? undefined,
+      });
     }
 
     const photoRef = await this.storage.put(
@@ -550,6 +606,10 @@ export class PunchService {
           photoRef,
           faceMatchResult,
           faceMatchDistance,
+          livenessScore:
+            livenessScore === null
+              ? null
+              : new Prisma.Decimal(livenessScore.toFixed(4)),
           latitude: new Prisma.Decimal(dto.latitude),
           longitude: new Prisma.Decimal(dto.longitude),
           geofenceResult,
@@ -758,24 +818,22 @@ export class PunchService {
   }
 
   /**
-   * The selfie behind a flagged punch, for whoever decides the exception (2026-10-20). Null for a
-   * punch with no capture. A face that did not match is the very thing being decided, and the
-   * approver had no way to look at it.
+   * The selfie a punch was taken with. Null for a punch with no capture, and once the retention
+   * sweep has deleted it. Read by whoever decides an exception (2026-10-20): a face that did not
+   * match is the very thing being decided, and the approver had no way to look at it. Since 057
+   * also by the daily register, for every punch.
    */
-  async exceptionPhoto(
-    ctx: RlsContext,
-    punchId: string,
-  ): Promise<Buffer | null> {
-    const ref = await this.exceptionPhotoRef(ctx, punchId);
+  async punchPhoto(ctx: RlsContext, punchId: string): Promise<Buffer | null> {
+    const ref = await this.punchPhotoRef(ctx, punchId);
     return ref ? this.storage.get(ref) : null;
   }
 
-  /** Whether `exceptionPhoto` has a selfie to give — without fetching it. */
-  async hasExceptionPhoto(ctx: RlsContext, punchId: string): Promise<boolean> {
-    return (await this.exceptionPhotoRef(ctx, punchId)) !== null;
+  /** Whether `punchPhoto` has a selfie to give — without fetching it. */
+  async hasPunchPhoto(ctx: RlsContext, punchId: string): Promise<boolean> {
+    return (await this.punchPhotoRef(ctx, punchId)) !== null;
   }
 
-  private async exceptionPhotoRef(
+  private async punchPhotoRef(
     ctx: RlsContext,
     punchId: string,
   ): Promise<string | null> {

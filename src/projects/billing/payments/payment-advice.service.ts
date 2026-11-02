@@ -80,6 +80,8 @@ export interface PaymentAdviceView {
     name: string;
     address: string | null;
     logo: Buffer | null;
+    /** The offices, email and website under the name (055); the address alone when absent. */
+    lines?: string[];
   };
   /** Label/value pairs in the screenshot's order: left column, right column. */
   details: {
@@ -266,6 +268,7 @@ export class PaymentAdviceService {
         name: company.name,
         address: company.address,
         logo: company.logo,
+        lines: company.contactLines,
       },
       title: PAYMENT_ADVICE_TEMPLATE.title,
       details: {

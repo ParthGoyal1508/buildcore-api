@@ -7,6 +7,8 @@ export const ACKNOWLEDGEMENT_NAMESPACE = 'labour-acknowledgement';
 export const WORKER_FACE_NAMESPACE = 'labour-face';
 /** 031: the photo behind each accepted labour face punch. */
 export const LABOUR_PUNCH_NAMESPACE = 'labour-punch';
+/** A refused labour attempt's photo (057), kept for the shorter refusal retention. */
+export const LABOUR_PUNCH_REFUSAL_NAMESPACE = 'labour-punch-refusal';
 /** 034: a supervisor's group photo of a site, kept for reference only. */
 export const LABOUR_SITE_PHOTO_NAMESPACE = 'labour-site-photo';
 

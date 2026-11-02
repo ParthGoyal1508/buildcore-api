@@ -3,10 +3,12 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -16,7 +18,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AccessLevel, Permission } from '@prisma/client';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -33,6 +35,7 @@ import {
 } from './dto/mark-attendance.dto';
 import { RefusalsQueryDto } from './dto/refusals-query.dto';
 import { PunchRefusalsService } from '../punch/punch-refusals.service';
+import { PunchService } from '../punch/punch.service';
 import { resolveCompanyId } from '../../settings/company-scope';
 
 /** Admin attendance administration (005 US3). */
@@ -45,6 +48,7 @@ export class AttendanceAdminController {
   constructor(
     private readonly attendance: AttendanceAdminService,
     private readonly refusals: PunchRefusalsService,
+    private readonly punches: PunchService,
   ) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
@@ -243,5 +247,56 @@ export class AttendanceAdminController {
         to: query.to ? new Date(query.to) : undefined,
       },
     );
+  }
+
+  @Get('refusals/:id/photo')
+  @RequireLevel(AccessLevel.write)
+  @ApiOperation({
+    summary: 'The photo of one refused punch attempt (JPEG, 057)',
+    description:
+      'Same audience as the refusal log — **write** on attendance. Kept for the refusal retention ' +
+      'period (30 days by default) and 404 after the sweep deletes it; the log row stays.',
+  })
+  async refusalPhoto(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ) {
+    const buffer = await this.refusals.photo(
+      callerFrom(user, request).rls,
+      this.companyOf(user, companyId),
+      id,
+    );
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buffer);
+  }
+
+  @Get('punches/:punchId/photo')
+  @ApiOperation({
+    summary:
+      'The photo a punch was taken with, for the daily register (JPEG, 057)',
+    description:
+      'Same audience as the register itself. Kept for the punch-photo retention period (14 days ' +
+      'by default) and 404 after the sweep deletes it, or for a punch entered by hand or ' +
+      'imported, which never had one; the punch itself is kept.',
+  })
+  async punchPhoto(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('punchId') punchId: string,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.punches.punchPhoto(
+      callerFrom(user, request).rls,
+      punchId,
+    );
+    if (!buffer)
+      throw new NotFoundException('No photo is held for this punch.');
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buffer);
   }
 }

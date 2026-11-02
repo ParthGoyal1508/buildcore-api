@@ -34,7 +34,17 @@ describe('PunchRefusalsService', () => {
     const prisma = {
       $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
     };
-    return { service: new PunchRefusalsService(prisma as never), writes };
+    const deleted: string[] = [];
+    const storage = {
+      delete: async (ref: string) => {
+        deleted.push(ref);
+      },
+    };
+    return {
+      service: new PunchRefusalsService(prisma as never, storage as never),
+      writes,
+      deleted,
+    };
   };
 
   const ctx = { isSuperAdmin: true } as never;
@@ -62,15 +72,21 @@ describe('PunchRefusalsService', () => {
     expect(writes[0].reason).toBe(PunchRefusalReason.outside_geofence);
   });
 
-  it('stores no photo', async () => {
-    // Plan D20. A face-mismatch refusal means the system could not establish whose face it is, and
-    // retaining an unattributed biometric against a named employee is worse than the record it
-    // replaces. The distance is kept because a number is not a biometric.
+  it('keeps the refused photo with the row (057, reversing plan D20)', async () => {
+    // Plan D20 kept no photo: an unattributed biometric seemed worse than the record it replaced.
+    // The client reversed that on 2026-11-02 — with refusals now the only outcome of a failed
+    // check, the photo is the one way to see who was in front of the camera — on a short retention
+    // (30 days) enforced by the sweep.
     const { service, writes } = harness();
-    await service.record(ctx, input);
-    expect(Object.keys(writes[0])).not.toContain('photo');
-    expect(Object.keys(writes[0])).not.toContain('photoRef');
+    await service.record(ctx, { ...input, photoRef: 'punch-refusal/abc' });
+    expect(writes[0].photoRef).toBe('punch-refusal/abc');
     expect(writes[0].faceMatchDistance).toBe(0.42);
+  });
+
+  it('deletes the photo when the row cannot be written, so nothing is orphaned', async () => {
+    const { service, deleted } = harness({ failWrite: true });
+    await service.record(ctx, { ...input, photoRef: 'punch-refusal/abc' });
+    expect(deleted).toEqual(['punch-refusal/abc']);
   });
 
   it('never throws when the write fails', async () => {

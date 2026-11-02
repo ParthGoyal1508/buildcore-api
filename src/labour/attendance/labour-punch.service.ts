@@ -23,10 +23,16 @@ import { StorageService } from '../../common/storage/storage.service';
 import { assertInScope } from '../../settings/company-scope';
 import { BiometricsService } from '../../hr/biometrics/biometrics.service';
 import { ImageProcessingService } from '../../hr/biometrics/image-processing.service';
-import { decodePhotoPayload } from '../../hr/biometrics/photo-payload';
+import {
+  LivenessService,
+  livenessSubject,
+} from '../../hr/biometrics/liveness.service';
 import { zonedDateOnly } from '../../hr/leave/leave-days';
 import { checkGeofence } from '../../hr/punch/geofence.util';
-import { LABOUR_PUNCH_NAMESPACE } from '../constants/labour.constants';
+import {
+  LABOUR_PUNCH_NAMESPACE,
+  LABOUR_PUNCH_REFUSAL_NAMESPACE,
+} from '../constants/labour.constants';
 import { LabourRefsService } from '../labour-refs.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
 import { parseDateOnly } from '../wage-rates/wage-rate.service';
@@ -101,6 +107,7 @@ export class LabourPunchService {
     private readonly images: ImageProcessingService,
     private readonly supervisorSites: SupervisorSiteService,
     private readonly days: LabourDayService,
+    private readonly liveness: LivenessService,
   ) {}
 
   /**
@@ -239,7 +246,34 @@ export class LabourPunchService {
       type: r.type,
       reason: r.reason,
       at: r.createdAt.toISOString(),
+      // 057: the evidence, for whoever reviews the attempt. The storage key stays on the server.
+      latitude: r.latitude.toNumber(),
+      longitude: r.longitude.toNumber(),
+      distanceMetres: r.distanceMetres?.toNumber() ?? null,
+      accuracyMetres: r.accuracyMetres?.toNumber() ?? null,
+      faceMatchDistance: r.faceMatchDistance?.toNumber() ?? null,
+      hasPhoto: r.photoRef !== null,
+      livenessFailure: r.livenessFailure,
     }));
+  }
+
+  /**
+   * The photo of one refused labour attempt (057), at a site the caller may see. 404 once the
+   * retention sweep has deleted it — the log row stays.
+   */
+  async refusalPhoto(caller: AuthenticatedUser, id: string): Promise<Buffer> {
+    const row = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.labourPunchRefusal.findFirst({
+        where: { id },
+        select: { siteId: true, photoRef: true },
+      }),
+    );
+    if (!row) throw new NotFoundException('Refused attempt not found');
+    await this.supervisorSites.assertSiteAllowed(caller, row.siteId);
+    if (!row.photoRef) {
+      throw new NotFoundException('No photo is held for this refused attempt.');
+    }
+    return this.storage.get(row.photoRef);
   }
 
   async punch(
@@ -248,11 +282,13 @@ export class LabourPunchService {
       siteId: string;
       workerId: string;
       type: LabourPunchType;
-      photo: string;
+      challengeId: string;
       latitude: number;
       longitude: number;
       accuracyMeters?: number;
     },
+    /** The liveness capture (057), in the challenge's step order. */
+    frames: Buffer[],
     ipAddress: string,
   ): Promise<LabourPunchResult> {
     await this.supervisorSites.assertSiteAllowed(caller, dto.siteId);
@@ -299,16 +335,35 @@ export class LabourPunchService {
     // sum. The face is computed from the photo as uploaded, not the compressed copy — the matcher
     // downscales on its own, and waiting for the re-encode only delayed it. The checks below still
     // run in the order they always have; only the waiting overlaps.
-    const photo = decodePhotoPayload(dto.photo, 'Labour photo');
-    const [geofence, accuracyMax, compressed, stored, candidate, rules] =
+    //
+    // 057: the capture follows a liveness challenge issued for this supervisor and this labour,
+    // spent here once whatever the outcome. The straight frame is the punch photo.
+    const steps = await this.liveness.consume(
+      dto.challengeId,
+      livenessSubject(caller.id, 'labour-punch', worker.id),
+    );
+    const photo = frames[steps.indexOf('straight')] ?? frames[0];
+    const [geofence, accuracyMax, compressed, stored, judgement, rules] =
       await Promise.all([
         this.refs.getSiteGeofence(caller, dto.siteId),
         this.refs.getPunchAccuracyMaxMetres(worker.companyId),
         this.images.compressPunchPhoto(photo),
         this.enrolledTemplate(worker.faceEnrolmentId),
-        this.biometrics.computeDescriptor([photo]).catch(() => null),
+        this.liveness.judge(steps, frames),
         this.refs.getDayRules(worker.companyId),
       ]);
+    const candidate = judgement.straight?.descriptor ?? null;
+    // No face in the straight frame keeps `no_face_detected`; any other failed check is liveness.
+    const livenessFailure =
+      judgement.failure &&
+      !(
+        judgement.failure.kind === 'no_face' &&
+        judgement.failure.step === 'straight'
+      )
+        ? judgement.failure
+        : null;
+    const livenessScore =
+      judgement.realScore === null ? null : judgement.realScore.toFixed(4);
 
     // --- Location: the employee rule (020 FR-011 to FR-013). ---
     if (!geofence.isActive) {
@@ -332,12 +387,15 @@ export class LabourPunchService {
       ? LabourPunchRefusalReason.outside_geofence
       : null;
 
-    // --- Face: always refuses on failure (031). ---
+    // --- Face and liveness: always refuse on failure (031, 057). Liveness before the match: a
+    // picture of the right labour matches, and the true reason is that it was not a live face. ---
     const match = candidate
       ? this.biometrics.compareDescriptors(candidate, stored)
       : null;
     const faceReason = !candidate
       ? LabourPunchRefusalReason.no_face_detected
+      : livenessFailure
+      ? LabourPunchRefusalReason.liveness_failed
       : !match?.matched
       ? LabourPunchRefusalReason.face_mismatch
       : null;
@@ -349,6 +407,12 @@ export class LabourPunchService {
       : false;
     const refusal = enforced && locationReason ? locationReason : faceReason;
     if (refusal) {
+      // 057: the refused photo is kept with the log row, for an administrator to see who was in
+      // front of the camera; the retention sweep deletes it after the refusal period. A failed
+      // upload costs the evidence, not the refusal.
+      const refusalPhotoRef = await this.storage
+        .put(LABOUR_PUNCH_REFUSAL_NAMESPACE, compressed, 'image/jpeg')
+        .catch(() => null);
       await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
         tx.labourPunchRefusal.create({
           data: {
@@ -363,13 +427,30 @@ export class LabourPunchService {
             accuracyMetres: dto.accuracyMeters ?? null,
             distanceMetres: distanceMeters,
             faceMatchDistance: match?.distance ?? null,
+            photoRef: refusalPhotoRef,
+            livenessScore,
+            livenessFailure: livenessFailure?.kind ?? null,
           },
         }),
-      );
-      throw labourPunchRefused(refusal);
+      ).catch(async (error: unknown) => {
+        // Stored for this row alone; without the row nothing would ever delete it.
+        if (refusalPhotoRef) {
+          await this.storage.delete(refusalPhotoRef).catch(() => undefined);
+        }
+        throw error;
+      });
+      throw labourPunchRefused(refusal, {
+        distanceMeters: unlocatable ? undefined : distanceMeters,
+        allowedMeters:
+          geofence.geofenceRadiusMeters +
+          (unlocatable ? 0 : dto.accuracyMeters ?? 0),
+        accuracyMeters: dto.accuracyMeters,
+        accuracyMaxMeters: accuracyMax,
+        liveness: livenessFailure ?? undefined,
+      });
     }
 
-    // Stored only once accepted: a refused photo would be an orphan nothing references.
+    // The punch's own photo, stored only once accepted (a refused one went to the refusal row).
     const photoRef = await this.storage.put(
       LABOUR_PUNCH_NAMESPACE,
       compressed,
@@ -404,6 +485,7 @@ export class LabourPunchService {
             supervisorId: caller.id,
             photoRef,
             faceMatchDistance: match?.distance ?? 0,
+            livenessScore,
             latitude: dto.latitude,
             longitude: dto.longitude,
             accuracyMetres: dto.accuracyMeters ?? null,

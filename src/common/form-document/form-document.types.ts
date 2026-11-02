@@ -18,6 +18,11 @@ export interface FormCompany {
   name: string;
   address: string | null;
   logo: Buffer | null;
+  /**
+   * The offices, email and website under the name (055) — `getDocumentIdentity().contactLines`.
+   * Printed in place of `address` when given; the spreadsheet copies keep the address.
+   */
+  lines?: string[];
 }
 
 /**

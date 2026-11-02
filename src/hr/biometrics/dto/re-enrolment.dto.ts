@@ -1,10 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ReEnrolmentRequestStatus } from '@prisma/client';
+import { Transform } from 'class-transformer';
 import {
-  ArrayMaxSize,
-  ArrayMinSize,
   Equals,
-  IsArray,
   IsIn,
   IsNotEmpty,
   IsOptional,
@@ -12,7 +10,6 @@ import {
   MaxLength,
   ValidateIf,
 } from 'class-validator';
-import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /** An employee asking for their face template to be replaced (FR-013). */
 export class RequestReEnrolmentDto {
@@ -61,15 +58,18 @@ export class ReEnrolmentQueryDto {
  * replaces a template; it is not a new consent event.
  */
 export class CompleteReEnrolmentDto {
-  @ApiProperty({ type: [String], minItems: 3, maxItems: 5 })
-  @IsArray()
-  @ArrayMinSize(3, { message: 'At least 3 photos are required to re-enrol.' })
-  @ArrayMaxSize(5, { message: 'At most 5 photos may be submitted.' })
-  @IsString({ each: true })
-  @IsBase64Payload({ each: true })
-  photos: string[];
+  @ApiProperty({
+    description:
+      'The liveness challenge the capture followed (057, flow `staff-enrolment`); the photos are ' +
+      'the multipart `frames`.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  challengeId: string;
 
   @ApiProperty({ description: 'Must be exactly true.' })
+  @Transform(({ value }) => value === true || value === 'true')
   @Equals(true, {
     message: 'consentAcknowledged must be true to re-enrol biometric data.',
   })

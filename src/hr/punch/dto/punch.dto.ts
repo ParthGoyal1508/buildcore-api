@@ -16,7 +16,6 @@ import {
   Min,
   IsNumber,
 } from 'class-validator';
-import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 export class SubmitPunchDto {
   @ApiProperty({ enum: PunchType })
@@ -24,18 +23,23 @@ export class SubmitPunchDto {
   type: PunchType;
 
   @ApiProperty({
-    description: 'Base64-encoded photo (data-URL prefix optional).',
+    description:
+      'The liveness challenge this capture followed (057, `POST /liveness/challenges` with flow ' +
+      '`staff-punch`). The photos themselves are the multipart `frames`, in its step order.',
   })
   @IsString()
   @IsNotEmpty()
-  @IsBase64Payload()
-  photo: string;
+  @MaxLength(64)
+  challengeId: string;
 
+  // Multipart fields arrive as text (057); converted here, not by a global implicit conversion.
   @ApiProperty({ example: 19.076 })
+  @Type(() => Number)
   @IsLatitude()
   latitude: number;
 
   @ApiProperty({ example: 72.8777 })
+  @Type(() => Number)
   @IsLongitude()
   longitude: number;
 
@@ -50,6 +54,7 @@ export class SubmitPunchDto {
     example: 25,
   })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   @Max(10_000)

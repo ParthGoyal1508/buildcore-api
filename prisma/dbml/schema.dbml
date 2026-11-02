@@ -62,6 +62,31 @@ employee: a Super Admin usually has no employee record. Only the derived descrip
 no photos — and a re-registration overwrites it.'
 }
 
+Table LivenessChallenge {
+  id String [pk]
+  subject String [not null, note: 'Who may present it: the caller\'s user id, the purpose, and for labour the worker.']
+  steps String[] [not null, note: '`straight`, `left`, `right` — the frames expected, in order.']
+  expiresAt DateTime [not null]
+  usedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'The password a confirmation purpose checks instead of the caller\'s own (054, 2026-11-01).
+
+App Settings is confirmed with a password of its own, not the Super Admin\'s sign-in password.
+It is generated and rotated only by `prisma/rotate-settings-password.ts`: there is no route
+that sets it, so nothing in the interface can show or change it. Only the argon2 hash is kept.
+A one-time liveness challenge (057): the head-turn sequence a capture must show, issued by the
+server so a recorded video cannot know it in advance, valid for two minutes and consumed by the
+first submission that presents it. Not tenant data — keyed to whoever asked — so it lives in
+`shared` under the Super Admin policy and is touched only by `LivenessService`.'
+}
+
+Table ConfirmationSecret {
+  purpose String [pk, note: 'A `CONFIRMATION_PURPOSES` key, e.g. `cash-visibility`.']
+  hash String [not null]
+  rotatedAt DateTime [default: `now()`, not null]
+}
+
 Table Role {
   id String [pk]
   name String [not null, note: 'Unique among the global roles, and within each company\'s own (036 C10) — two partial unique
@@ -252,6 +277,8 @@ order (2026-10-14) — the client\'s formats carry "Ph:", "Email:" and "Website:
 registered office. Optional: a document prints the lines that are filled.']
   email String
   website String
+  corporateAddress String [note: 'The corporate office, where it differs from the registered office (055, 2026-11-02). Printed
+under the registered office at the head of every generated PDF; blank prints nothing.']
   pfEstablishmentCode String
   esicCode String
   professionalTaxRegNumber String
@@ -337,23 +364,18 @@ had made a decision nobody made.
 
 Deliberately **not** feature 013\'s `WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES`: same units,
 different surface, different tolerance. Merging them means tuning one to fix the other.']
-  punchBlockEnforced Boolean [not null, default: false, note: 'Whether a punch that fails location or face validation is **refused** rather than recorded as
+  punchBlockEnforced Boolean [not null, default: true, note: 'Whether a punch that fails location or face validation is **refused** rather than recorded as
 an exception for an admin (020 FR-013).
 
-**Default false, and that is the point.** The client accepted the hard block\'s cost without
-knowing how often it would fire, and `PunchRefusal` is accumulating that figure right now while
-punches are still being accepted. Shipping the inversion switched on would spend the only
-moment at which their decision is cheap to reverse — so the code ships and the behaviour does
-not, and the answer they give becomes a settings change rather than a release.
+**Default true since 057 (2026-11-02).** It shipped false so the refusal log could measure how
+often the block would fire before the client decided; they have now decided, and a punch that
+fails either check is refused for every company. The column and every branch that reads it are
+kept on purpose — the Settings toggle is only hidden — so one company can still be switched back
+to "record as an exception" with an UPDATE and no deploy.
 
-It also keeps the decision cheap in **both** directions afterwards. One company can be switched
-on, watched for a fortnight against its own refusal log, and switched off again without a
-deploy.
-
-What a flag cannot do is make the branch safe by never running. A dormant path is untested in
-production until the day somebody turns it on, which is why every test of the refusal path runs
-with enforcement forced on rather than inheriting this default — see `punch.service.spec.ts`.
-The flag decides whose punches are refused, never whether the code is exercised.']
+Every test of the refusal path forces enforcement on rather than inheriting this default — see
+`punch.service.spec.ts` — so the flag decides whose punches are refused, never whether the code
+is exercised.']
   deductionCeilingPercent Int [not null, default: 50, note: 'The ceiling on **total** deductions from one payslip, as a percentage of its gross wages
 (020 FR-007a).
 
@@ -2451,6 +2473,8 @@ constraint keeps this mandatory for employee-sourced punches.']
   faceMatchDistance Decimal [note: 'The measured descriptor distance behind `faceMatchResult`. Kept so an admin
 resolving an exception can see how near the miss was, and so the configured
 threshold can be retuned against real data instead of guesswork.']
+  livenessScore Decimal [note: 'The anti-spoof models\' "real face" score, mean over the liveness frames (057) — kept for
+calibrating the pass threshold against real devices; null before 057.']
   latitude Decimal
   longitude Decimal
   geofenceResult GeofenceResult
@@ -2734,17 +2758,23 @@ than one adjusted by the accuracy allowance.']
   distanceMeters Decimal
   accuracyMeters Int
   faceMatchDistance Decimal [note: 'The face-match distance, when a comparison happened at all. A number, not a biometric.']
+  photoRef String [note: 'The photo of the refused attempt (057), kept for review and deleted by the retention sweep
+after `refusalPhotoRetentionDays`; null once deleted, or for a would-be refusal recorded while
+the block was off (that punch keeps its own photo).']
+  livenessScore Decimal [note: 'The anti-spoof models\' "real face" score, mean over the liveness frames (057) — kept for
+calibrating the pass threshold against real devices; null before 057.']
+  livenessFailure String [note: 'Which liveness check failed, for a `liveness_failed` refusal (057): `did_not_turn`,
+`different_person`, `spoof` or `no_face`.']
   capturedAt DateTime [not null, note: 'When the punch was taken, and when it reached the server — a refused offline punch may arrive
 long after the moment it describes.']
   createdAt DateTime [default: `now()`, not null]
 
   Note: 'A punch that was refused, or in Phase 2 would have been (020 FR-013c).
 
-**Deliberately no photo column** (plan D20, research §4). A face-mismatch refusal means the
-system could not establish whose face it is — retaining an unattributed biometric against a named
-employee is worse than the exception record it replaces, and the photo would be evidence of
-nothing except that somebody stood in front of a camera. `faceMatchDistance` is kept, because a
-number is not a biometric.
+**Since 057 the attempt\'s photo is kept** (`photoRef`, 30 days), reversing plan D20, which kept
+none on the ground that an unattributed biometric was worse than no record. With refusal now the
+only outcome of a failed check, the photo is how an administrator sees who was in front of the
+camera; the retention sweep deletes it.
 
 This table is how a refused punch stays visible to somebody. Under FR-013a the day reads as no
 punch at all — which is the point — so without this the refusal would leave no trace anywhere and
@@ -6130,6 +6160,8 @@ Table LabourPunch {
 `LabourPunchCorrection`.']
   photoRef String
   faceMatchDistance Decimal
+  livenessScore Decimal [note: 'The anti-spoof models\' "real face" score, mean over the liveness frames (057) — kept for
+calibrating the pass threshold against real devices; null before 057.']
   latitude Decimal
   longitude Decimal
   accuracyMetres Decimal
@@ -6192,6 +6224,12 @@ Table LabourPunchRefusal {
   accuracyMetres Decimal
   distanceMetres Decimal
   faceMatchDistance Decimal
+  photoRef String [note: 'The photo of the refused attempt (057), kept for review and deleted by the retention sweep
+after `refusalPhotoRetentionDays`; null once deleted.']
+  livenessScore Decimal [note: 'The anti-spoof models\' "real face" score, mean over the liveness frames (057) — kept for
+calibrating the pass threshold against real devices; null before 057.']
+  livenessFailure String [note: 'Which liveness check failed, for a `liveness_failed` refusal (057): `did_not_turn`,
+`different_person`, `spoof` or `no_face`.']
   createdAt DateTime [default: `now()`, not null]
 
   Note: '031: a refused labour punch. Nothing is written to attendance, so this is the only trace.'
@@ -6837,6 +6875,7 @@ Enum PunchRefusalReason {
   unlocatable
   face_mismatch
   no_face_detected
+  liveness_failed
 }
 
 Enum ExitReason {
@@ -7198,6 +7237,7 @@ Enum LabourPunchRefusalReason {
   unlocatable
   face_mismatch
   no_face_detected
+  liveness_failed
 }
 
 Enum PaymentSheetStatus {

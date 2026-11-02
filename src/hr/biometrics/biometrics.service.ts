@@ -1,3 +1,5 @@
+import type { FaceAnalysis } from './face-inference';
+
 /** The length of an SFace face embedding: 128 32-bit floats. */
 export const FACE_DESCRIPTOR_LENGTH = 128;
 
@@ -38,6 +40,13 @@ export abstract class BiometricsService {
 
   /** Compares a descriptor against a stored one, against the configured threshold. */
   abstract compareDescriptors(a: Float32Array, b: Float32Array): FaceMatch;
+
+  /**
+   * One frame to its descriptor, head turn and liveness score (057), or null when it shows no face.
+   * What `LivenessService` judges a capture on. Abstract on purpose: a default that "passes" would
+   * be a liveness check that any implementation could silently skip.
+   */
+  abstract analyse(photo: Buffer): Promise<FaceAnalysis | null>;
 
   /** Serialises a descriptor for the encrypted Postgres column. */
   serializeDescriptor(descriptor: Float32Array): Buffer {

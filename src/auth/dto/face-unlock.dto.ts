@@ -1,13 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import {
-  ArrayMaxSize,
-  ArrayMinSize,
-  IsArray,
-  IsIn,
-  IsString,
-} from 'class-validator';
-
-import { IsBase64Payload } from '../../common/uploads/base64-payload';
+import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import {
   CONFIRMATION_PURPOSES,
   ConfirmationPurpose,
@@ -24,26 +16,27 @@ export class FaceUnlockPurposeDto {
   purpose: ConfirmationPurpose;
 }
 
-/** One live camera frame, matched against the caller's registered face (054). */
-export class ConfirmFaceDto extends FaceUnlockPurposeDto {
+/**
+ * A face capture in place of the password (054). Since 057 a liveness capture: the photos are the
+ * multipart `frames`, in the step order of the challenge named here.
+ */
+class FaceUnlockCaptureDto extends FaceUnlockPurposeDto {
   @ApiProperty({
-    description: 'Base64 JPEG/PNG/WebP (data-URL prefix optional)',
+    description:
+      'The liveness challenge the capture followed: flow `unlock-confirm` (one frame facing the ' +
+      'camera, then both head turns) or `unlock-enrolment` (two facing, then both turns).',
   })
   @IsString()
-  @IsBase64Payload()
-  photo: string;
+  @IsNotEmpty()
+  @MaxLength(64)
+  challengeId: string;
 }
 
-/** Registering (or replacing) the caller's own face: 3–5 frames, averaged into one descriptor. */
-export class EnrolFaceUnlockDto extends FaceUnlockPurposeDto {
-  @ApiProperty({ type: [String], minItems: 3, maxItems: 5 })
-  @IsArray()
-  @ArrayMinSize(3, { message: 'At least 3 photos are required.' })
-  @ArrayMaxSize(5, { message: 'At most 5 photos may be submitted.' })
-  @IsString({ each: true })
-  @IsBase64Payload({ each: true })
-  photos: string[];
-}
+/** Matching a live face against the caller's registered one. */
+export class ConfirmFaceDto extends FaceUnlockCaptureDto {}
+
+/** Registering (or replacing) the caller's own face from a guided capture. */
+export class EnrolFaceUnlockDto extends FaceUnlockCaptureDto {}
 
 export class FaceUnlockStatusDto {
   @ApiProperty() enrolled: boolean;

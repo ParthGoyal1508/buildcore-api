@@ -7,6 +7,8 @@ import PDFDocument = require('pdfkit');
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
+import { drawCompanyHeader } from '../common/document-header/company-header';
+
 /**
  * Rendering a letter onto the company's own stationery (2026-10-11).
  *
@@ -91,6 +93,30 @@ const CONTENT_WIDTH = PAGE.width - SAFE.left - SAFE.right;
 const BODY_SIZE = 10;
 const TABLE_SIZE = 9;
 const LINE_GAP = 2.5;
+
+/**
+ * The type a letter is set in (055). On plain paper — the work order and purchase order, which
+ * open with the company band — the client asked for everything a little bigger. A letter on the
+ * letterhead keeps 10pt, which the artwork's clear band was fitted to.
+ */
+interface TypeSizes {
+  body: number;
+  table: number;
+  title: number;
+  heading: number;
+}
+const LETTERHEAD_TYPE: TypeSizes = {
+  body: BODY_SIZE,
+  table: TABLE_SIZE,
+  title: 14,
+  heading: 10.5,
+};
+const PLAIN_TYPE: TypeSizes = {
+  body: 10.5,
+  table: 9.5,
+  title: 15,
+  heading: 11.5,
+};
 
 /** Cell padding inside a table, and the rule weight around it. */
 const CELL_PAD = 5;
@@ -183,7 +209,7 @@ export interface RenderLetterInput {
 export interface BrandHeader {
   logo: Buffer | null;
   name: string;
-  /** Registered office, phone, email, website — one line each, blank ones left out. */
+  /** `companyContactLines`: the offices, then phone, email and website (055). */
   lines: string[];
 }
 
@@ -379,8 +405,9 @@ function drawTable(
   newPage: () => void,
   bottomLimit: number,
   faces: Faces,
+  type: TypeSizes,
 ): void {
-  doc.fontSize(TABLE_SIZE);
+  doc.fontSize(type.table);
   // Measured in the body face, with a margin for the bold heading row — measured exactly, a
   // heading like "S.No." broke over two lines in its own column.
   const widths = columnWidths(rows, (s) => doc.widthOfString(s) * 1.08);
@@ -392,7 +419,7 @@ function drawTable(
     const heights = row.map((cell, i) =>
       doc.heightOfString(cell ?? '', { width: widths[i] - 2 * CELL_PAD }),
     );
-    const rowHeight = Math.max(...heights, TABLE_SIZE) + 2 * CELL_PAD;
+    const rowHeight = Math.max(...heights, type.table) + 2 * CELL_PAD;
 
     // Measured before the row is drawn, not after: a row split across a page boundary
     // leaves its own top border on one page and its text on the next.
@@ -425,7 +452,7 @@ function drawTable(
     });
     doc.y = top + rowHeight;
   });
-  doc.font(faces.regular).fontSize(BODY_SIZE);
+  doc.font(faces.regular).fontSize(type.body);
 }
 
 /**
@@ -485,8 +512,8 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       }
     };
     const brand = input.brandHeader ?? null;
+    const type = brand ? PLAIN_TYPE : LETTERHEAD_TYPE;
     const stationeryImage = brand ? null : open(input.letterhead);
-    const logoImage: any = brand ? open(brand.logo) : null;
 
     // The clear band. Letterhead artwork reserves its own header and footer; a page that
     // prints its own header (the work order's logo band) only needs a margin, plus room at the
@@ -523,7 +550,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
         width: half,
         align: 'right',
       });
-      doc.fontSize(BODY_SIZE);
+      doc.fontSize(type.body);
     };
 
     const draftMark = () => {
@@ -545,7 +572,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       // transform but not the font size, and a page started mid-paragraph carried on in 64pt.
       doc
         .font(faces.regular)
-        .fontSize(BODY_SIZE)
+        .fontSize(type.body)
         .fillOpacity(1)
         .fillColor('#000000');
     };
@@ -562,41 +589,16 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     newPage();
 
     if (brand) {
-      // Logo on the left, the name and the registered office beside it, a rule under both —
-      // the band the client's work order and purchase order open with.
-      const top = doc.y;
-      let textLeft = SAFE.left;
-      let logoBottom = top;
-      if (logoImage) {
-        const scale = Math.min(120 / logoImage.width, 56 / logoImage.height);
-        doc.image(logoImage, SAFE.left, top, {
-          width: logoImage.width * scale,
-          height: logoImage.height * scale,
-        });
-        textLeft = SAFE.left + logoImage.width * scale + 14;
-        logoBottom = top + logoImage.height * scale;
-      }
-      const textWidth = SAFE.left + CONTENT_WIDTH - textLeft;
-      doc
-        .font(faces.bold)
-        .fontSize(15)
-        .fillColor('#000000')
-        .text((brand.name ?? '').toUpperCase(), textLeft, top, {
-          width: textWidth,
-        });
-      doc.font(faces.regular).fontSize(8.5);
-      for (const line of brand.lines) {
-        doc.text(line, textLeft, doc.y + 1, { width: textWidth });
-      }
-      const ruleAt = Math.max(doc.y, logoBottom) + 8;
-      doc
-        .lineWidth(1)
-        .strokeColor('#333333')
-        .moveTo(SAFE.left, ruleAt)
-        .lineTo(SAFE.left + CONTENT_WIDTH, ruleAt)
-        .stroke();
-      doc.font(faces.regular).fontSize(BODY_SIZE).fillColor('#000000');
-      doc.y = ruleAt + 12;
+      // The company band (055): a bigger logo, the name, the registered and corporate offices,
+      // email and website — the same band every generated PDF opens with.
+      doc.y = drawCompanyHeader(doc, brand, {
+        x: SAFE.left,
+        y: doc.y,
+        width: CONTENT_WIDTH,
+        regular: faces.regular,
+        bold: faces.bold,
+      });
+      doc.font(faces.regular).fontSize(type.body).fillColor('#000000');
     }
 
     // The signature block's real height, for the page-break checks below (2026-10-15). The
@@ -605,7 +607,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     // A signing block is drawn when somebody signs, or when the format always has one.
     const signed = Boolean(input.signature || input.signatureLines);
     const captionHeight = input.signatureLines
-      ? input.signatureLines.length * (BODY_SIZE + 4)
+      ? input.signatureLines.length * (type.body + 4)
       : 26;
     let signatureBlock = SIGNATURE_BLOCK;
     if (!input.signature && input.signatureLines) {
@@ -633,12 +635,15 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     const titleInBody = blocks.some((b) => b.kind === 'title');
     const drawTitle = () => {
       if (!input.title.trim()) return;
-      doc.font(faces.bold).fontSize(13).text(input.title, SAFE.left, doc.y, {
-        width: CONTENT_WIDTH,
-        align: 'center',
-        underline: true,
-      });
-      doc.font(faces.regular).fontSize(BODY_SIZE);
+      doc
+        .font(faces.bold)
+        .fontSize(type.title)
+        .text(input.title, SAFE.left, doc.y, {
+          width: CONTENT_WIDTH,
+          align: 'center',
+          underline: true,
+        });
+      doc.font(faces.regular).fontSize(type.body);
       doc.y += 14;
     };
     if (input.titleFirst && !titleInBody) drawTitle();
@@ -646,7 +651,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     // Reference and date on one line, as every document the client sent carries them.
     // Skipped entirely when neither is known, rather than printing an empty rule.
     if (input.referenceNo || input.issueDate) {
-      doc.fontSize(BODY_SIZE).fillColor('#000000');
+      doc.fontSize(type.body).fillColor('#000000');
       const top = doc.y;
       if (input.referenceNo) {
         doc.text(
@@ -670,7 +675,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
           },
         );
       }
-      doc.y = top + BODY_SIZE + 10;
+      doc.y = top + type.body + 10;
     }
 
     if (!input.titleFirst && !titleInBody) drawTitle();
@@ -702,36 +707,99 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       }
       if (block.kind === 'signature') return;
       if (block.kind === 'title') {
-        if (bottomLimit - doc.y < BODY_SIZE * 6) newPage();
+        if (bottomLimit - doc.y < type.body * 6) newPage();
         doc.y += 4;
         drawTitle();
         return;
       }
       if (block.kind === 'heading') {
         // A heading never ends a page: it moves over with at least two lines of what it heads.
-        if (bottomLimit - doc.y < BODY_SIZE * 4) newPage();
+        if (bottomLimit - doc.y < type.body * 4) newPage();
         doc.y += 4;
         doc
           .font(faces.bold)
-          .fontSize(BODY_SIZE)
+          .fontSize(type.heading)
           .text(block.text, SAFE.left, doc.y, { width: CONTENT_WIDTH });
-        doc.font(faces.regular);
+        doc.font(faces.regular).fontSize(type.body);
         doc.y += 3;
         return;
       }
       if (block.kind === 'table') {
         doc.y += 4;
-        drawTable(doc, block.rows, block.headed, newPage, bottomLimit, faces);
+        drawTable(
+          doc,
+          block.rows,
+          block.headed,
+          newPage,
+          bottomLimit,
+          faces,
+          type,
+        );
         doc.y += 8;
         return;
       }
+      // A clause's heading in bold (055 — the client: "main heading bold in terms and conditions
+      // of PO and all other letters"). A line opening with one is drawn on its own, the heading
+      // bold and the clause after it regular; the lines between are prose as before.
+      let run: string[] = [];
+      const flush = () => {
+        if (run.length) drawProse(run);
+        run = [];
+      };
+      for (const line of block.lines) {
+        const lead = clauseLead(line);
+        if (!lead) {
+          run.push(line);
+          continue;
+        }
+        flush();
+        drawLead(lead);
+      }
+      flush();
+    };
+
+    /**
+     * One line opening with a clause heading: the heading bold, the clause after it regular. A
+     * clause that runs past the foot of the page is split there like prose, its heading staying
+     * with the first part.
+     */
+    const drawLead = ({ lead, rest }: { lead: string; rest: string }) => {
+      const whole = `${lead}${rest}`;
+      doc.font(faces.regular);
+      if (bottomLimit - doc.y < type.body * 2) newPage();
+      let consumed = measureConsumed(doc, whole, doc.y, bottomLimit - doc.y);
+      if (consumed <= lead.length) {
+        newPage();
+        consumed = measureConsumed(doc, whole, doc.y, bottomLimit - doc.y);
+      }
+      const piece = whole.slice(lead.length, consumed);
+      doc.font(faces.bold).text(lead, SAFE.left, doc.y, {
+        width: CONTENT_WIDTH,
+        lineGap: LINE_GAP,
+        continued: piece.length > 0,
+      });
+      if (piece) {
+        doc
+          .font(faces.regular)
+          .text(consumed < whole.length ? piece.replace(/\s+$/, '') : piece, {
+            lineGap: LINE_GAP,
+          });
+      }
+      doc.font(faces.regular);
+      if (consumed < whole.length) {
+        newPage();
+        drawProse([whole.slice(consumed).replace(/^\s+/, '')]);
+      }
+    };
+
+    const drawProse = (lines: string[]) => {
       // pdfkit paginates prose itself, but only against its own margins — which are zero
       // here — so the bottom limit is given explicitly and `height` makes it break rather
       // than run over the footer artwork.
-      let remaining = block.lines.join('\n');
+      let remaining = lines.join('\n');
       while (remaining.length > 0) {
         const available = bottomLimit - doc.y;
-        if (available < BODY_SIZE * 2) {
+        if (available < type.body * 2) {
           newPage();
           continue;
         }
@@ -842,14 +910,14 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
         // The format's own caption — "Authorized Signatory" — in place of name and title.
         input.signatureLines.forEach((line, i) => {
           doc
-            .fontSize(BODY_SIZE)
+            .fontSize(type.body)
             .font(i === 0 ? faces.bold : faces.regular)
             .text(line, SAFE.left, doc.y, { width: CONTENT_WIDTH });
         });
         doc.font(faces.regular);
       } else if (input.signature) {
         doc
-          .fontSize(BODY_SIZE)
+          .fontSize(type.body)
           .font(faces.bold)
           .text(input.signature.name, SAFE.left, doc.y, {
             width: CONTENT_WIDTH,
@@ -861,7 +929,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
             width: CONTENT_WIDTH,
           });
       }
-      doc.fontSize(BODY_SIZE);
+      doc.fontSize(type.body);
       doc.y += 10;
     }
 
@@ -870,6 +938,29 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
 
     doc.end();
   });
+}
+
+/**
+ * The heading a clause opens with, to print in bold (055): "4. DELIVERY TERMS:", "4.1 Delivery
+ * Date:", "9. Taxation — 9.1:", or a short label of its own — "Payment Terms:", "Invoice Copies:".
+ *
+ * A numbered clause's heading may be up to ten words; an unnumbered label up to five, starting
+ * with a capital — so a sentence that happens to contain a colon ("Please note: …" aside) is not
+ * mistaken for one. A colon inside a time or a link ("10:30", "https:") never ends a heading.
+ */
+export function clauseLead(
+  line: string,
+): { lead: string; rest: string } | null {
+  const match = /^(\s*)(\d+(?:\.\d+)*\.?\s+)?([^:]+?:)(?!\/\/|\d)(.*)$/.exec(
+    line,
+  );
+  if (!match) return null;
+  const [, indent, number, label, rest] = match;
+  const words = label.trim().split(/\s+/).length;
+  if (number ? words > 10 : words > 5 || !/^[A-Z]/.test(label.trim())) {
+    return null;
+  }
+  return { lead: `${indent}${number ?? ''}${label}`, rest };
 }
 
 /**

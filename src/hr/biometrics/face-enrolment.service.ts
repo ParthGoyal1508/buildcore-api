@@ -23,7 +23,7 @@ import { StorageService } from '../../common/storage/storage.service';
 import { EmployeesService } from '../employees/employees.service';
 import { BiometricsService, NoFaceDetectedError } from './biometrics.service';
 import { ImageProcessingService } from './image-processing.service';
-import { decodePhotoPayload } from './photo-payload';
+import { LivenessService, livenessSubject } from './liveness.service';
 
 /** Object-storage namespace for enrolment photos. */
 const ENROLMENT_NAMESPACE = 'face-enrolment';
@@ -99,6 +99,7 @@ export class FaceEnrolmentService {
     private readonly images: ImageProcessingService,
     private readonly storage: StorageService,
     private readonly auditLog: AuditLogService,
+    private readonly liveness: LivenessService,
     configService: ConfigService,
   ) {
     this.workspace = configService.get<WorkspaceConfig>('workspace');
@@ -157,17 +158,21 @@ export class FaceEnrolmentService {
     };
   }
 
-  /** Enrols the caller from 3–5 photos plus recorded consent (FR-001–FR-003). */
+  /**
+   * Enrols the caller from a liveness capture plus recorded consent (FR-001–FR-003; 057): two
+   * frames facing the camera and two head turns, on a challenge the server issued. A capture that
+   * is not a live person enrols nobody — a template made from a photo would let that photo punch.
+   */
   async enrol(
     caller: Caller,
-    photos: string[],
+    challengeId: string,
+    frames: Buffer[],
     consentMethod: ConsentMethod,
   ): Promise<EnrolmentStatusView> {
     const employee = await this.employees.requireByUserId(
       caller.rls,
       caller.userId,
     );
-    this.assertPhotoCount(photos);
 
     const existing = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.faceEnrolment.findUnique({ where: { employeeId: employee.id } }),
@@ -184,7 +189,8 @@ export class FaceEnrolmentService {
     // stored. Computing it from the originals instead would mean the stored photos
     // are not quite what the template was built from — a discrepancy nobody could
     // reproduce later when investigating a match failure.
-    const { descriptor, photoRefs } = await this.buildTemplate(photos);
+    await this.assertLive(caller, challengeId, frames);
+    const { descriptor, photoRefs } = await this.buildTemplate(frames);
 
     const enrolledAt = new Date();
     const record = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -498,13 +504,13 @@ export class FaceEnrolmentService {
   /** Consumes an approved unlock with a fresh capture (FR-016). */
   async completeReEnrolment(
     caller: Caller,
-    photos: string[],
+    challengeId: string,
+    frames: Buffer[],
   ): Promise<EnrolmentStatusView> {
     const employee = await this.employees.requireByUserId(
       caller.rls,
       caller.userId,
     );
-    this.assertPhotoCount(photos);
 
     const now = new Date();
     const unlock = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -531,7 +537,8 @@ export class FaceEnrolmentService {
       tx.faceEnrolment.findUnique({ where: { employeeId: employee.id } }),
     );
 
-    const { descriptor, photoRefs } = await this.buildTemplate(photos);
+    await this.assertLive(caller, challengeId, frames);
+    const { descriptor, photoRefs } = await this.buildTemplate(frames);
 
     const record = await withRlsContext(this.prisma, caller.rls, async (tx) => {
       const updated = await tx.faceEnrolment.update({
@@ -597,28 +604,26 @@ export class FaceEnrolmentService {
 
   /** Enforces the configured photo bounds. The DTO's literals exist for Swagger;
    * these configured values are the ones that actually decide. */
-  private assertPhotoCount(photos: string[]): void {
-    const { minEnrolmentPhotos, maxEnrolmentPhotos } = this.workspace.faceMatch;
-    if (photos.length < minEnrolmentPhotos) {
-      throw new BadRequestException(
-        `At least ${minEnrolmentPhotos} photos are required to enrol.`,
-      );
-    }
-    if (photos.length > maxEnrolmentPhotos) {
-      throw new BadRequestException(
-        `At most ${maxEnrolmentPhotos} photos may be submitted.`,
-      );
-    }
+  /** The capture must show a live person before it may become anyone's template (057). */
+  private async assertLive(
+    caller: Caller,
+    challengeId: string,
+    frames: Buffer[],
+  ): Promise<void> {
+    await this.liveness.assertLive(
+      challengeId,
+      livenessSubject(caller.userId, 'staff-enrolment'),
+      frames,
+      { subject: 'your', noFaceCode: 'FACE_NOT_DETECTED' },
+    );
   }
 
-  /** Decode → compress → derive descriptor → store, in that order. Shared by
-   * enrolment and re-enrolment so both produce templates the same way. */
+  /** Compress → derive descriptor → store, in that order. Shared by enrolment and re-enrolment so
+   * both produce templates the same way. Every frame of the capture contributes — the two slight
+   * head turns (057) give the template the angles a punch will actually be taken at. */
   private async buildTemplate(
-    photos: string[],
+    decoded: Buffer[],
   ): Promise<{ descriptor: Float32Array; photoRefs: string[] }> {
-    const decoded = photos.map((photo, index) =>
-      decodePhotoPayload(photo, `Photo ${index + 1}`),
-    );
     const compressed = await Promise.all(
       decoded.map((photo) => this.images.compressEnrolmentPhoto(photo)),
     );

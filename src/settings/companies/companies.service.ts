@@ -39,6 +39,10 @@ import { UpdateCompanyDto } from './dto/update-company.dto';
 import { logoVersionOf } from '../company-selection/company-selection.service';
 import { gstStateCodeFor } from '../../common/gst-states';
 import {
+  companyContactLines,
+  oneLineAddress,
+} from '../../common/document-header/company-header';
+import {
   branchLabel,
   composeAddress,
   ensureHeadOffice,
@@ -75,6 +79,12 @@ export interface CompanyBranchIdentity {
   composedAddress: string | null;
   /** "City, State". */
   place: string | null;
+  /**
+   * What every generated PDF prints under the company's name (055): the registered office (the
+   * head office), the corporate office, this branch's office when it is not the head office,
+   * then phone, email and website.
+   */
+  contactLines: string[];
 }
 
 /** Where company letterheads live in blob storage (2026-10-11). */
@@ -714,6 +724,8 @@ export class CompaniesService {
     logo: Buffer | null;
     /** "Deoli, Rajasthan" — where a work order's disputes are heard (2026-10-15). */
     place: string | null;
+    /** The lines under the name on every generated PDF (055) — see `getBranchIdentity`. */
+    contactLines: string[];
   }> {
     const b = await this.getBranchIdentity(companyId, branchId);
     const logo = b.logoRef
@@ -726,6 +738,7 @@ export class CompaniesService {
       pan: b.pan,
       logo,
       place: b.place,
+      contactLines: b.contactLines,
     };
   }
 
@@ -741,7 +754,7 @@ export class CompaniesService {
     companyId: string,
     branchId?: string | null,
   ): Promise<CompanyBranchIdentity> {
-    const { company, branch } = await withRlsContext(
+    const { company, branch, head } = await withRlsContext(
       this.prisma,
       { isSuperAdmin: true },
       async (tx) => {
@@ -755,10 +768,21 @@ export class CompaniesService {
             })
           : null;
         const branch = chosen ?? (await ensureHeadOffice(tx, companyId));
-        return { company, branch };
+        const head = branch.isHeadOffice
+          ? branch
+          : await ensureHeadOffice(tx, companyId);
+        return { company, branch, head };
       },
     );
     const { address: composedAddress, place } = composeAddress(branch);
+    const contactLines = companyContactLines({
+      registeredOffice: oneLineAddress(head) || null,
+      corporateOffice: company.corporateAddress,
+      branchOffice: branch.isHeadOffice ? null : oneLineAddress(branch),
+      phone: branch.phone,
+      email: branch.email,
+      website: branch.website ?? company.website,
+    });
     return {
       branchId: branch.id,
       isHeadOffice: branch.isHeadOffice,
@@ -783,6 +807,7 @@ export class CompaniesService {
       professionalTaxRegNumber: branch.professionalTaxRegNumber,
       composedAddress,
       place,
+      contactLines,
     };
   }
 
@@ -1066,6 +1091,7 @@ export class CompaniesService {
             phone: dto.phone ?? null,
             email: dto.email ?? null,
             website: dto.website ?? null,
+            corporateAddress: dto.corporateAddress ?? null,
             pfEstablishmentCode: dto.pfEstablishmentCode ?? null,
             esicCode: dto.esicCode ?? null,
             professionalTaxRegNumber: dto.professionalTaxRegNumber ?? null,

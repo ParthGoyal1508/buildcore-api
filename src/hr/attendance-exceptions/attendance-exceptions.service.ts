@@ -20,6 +20,7 @@ import type { ApprovalInstanceView } from '../../approvals/approval.types';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { withRlsContext } from '../../common/prisma/rls-context';
+import { StorageService } from '../../common/storage/storage.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
 
 /** A flagged punch with the spine's view of where it has got to (FR-007, FR-008). */
@@ -53,6 +54,7 @@ export class AttendanceExceptionsService {
     private readonly prisma: PrismaService,
     private readonly approvals: ApprovalService,
     private readonly auditLog: AuditLogService,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -237,6 +239,19 @@ export class AttendanceExceptionsService {
           },
         }),
     );
+  }
+
+  /**
+   * The photo a flagged punch was taken with (057), for whoever reviews it — the reviewer was
+   * previously told only that the face or the fence failed, never shown the face. Visible on the
+   * same terms as the punch itself; 404 once the retention sweep has deleted it.
+   */
+  async photo(caller: Caller, punchId: string): Promise<Buffer> {
+    const punch = await this.requirePunch(caller, punchId);
+    if (!punch.photoRef) {
+      throw new NotFoundException('No photo is held for this punch.');
+    }
+    return this.storage.get(punch.photoRef);
   }
 
   private async requirePunch(

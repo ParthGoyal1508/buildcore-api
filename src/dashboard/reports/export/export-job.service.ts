@@ -24,6 +24,7 @@ import {
   renderReportExcel,
   renderReportPdf,
 } from './export-renderer';
+import { CompaniesService } from '../../../settings/companies/companies.service';
 
 const STORAGE_NAMESPACE = 'report-exports';
 
@@ -73,6 +74,7 @@ export class ExportJobService {
     private readonly storage: StorageService,
     private readonly auditLog: AuditLogService,
     configService: ConfigService,
+    private readonly companies: CompaniesService,
   ) {
     this.threshold =
       configService.get<DashboardConfig>('dashboard').asyncExportRowThreshold;
@@ -89,7 +91,7 @@ export class ExportJobService {
     report: ReportData,
   ): Promise<SyncExport | AsyncExport> {
     if (report.rows.length <= this.threshold) {
-      const buffer = await this.render(reportName, format, report);
+      const buffer = await this.render(user, reportName, format, report);
       const { contentType, extension } = formatMeta(format);
       await this.audit(user, ipAddress, AuditAction.CREATE, null, {
         reportType,
@@ -221,7 +223,7 @@ export class ExportJobService {
   ): Promise<void> {
     try {
       await this.setStatus(user, jobId, ExportJobStatus.processing);
-      const buffer = await this.render(reportName, format, report);
+      const buffer = await this.render(user, reportName, format, report);
       const { contentType } = formatMeta(format);
       const fileRef = await this.storage.put(
         STORAGE_NAMESPACE,
@@ -267,14 +269,30 @@ export class ExportJobService {
     );
   }
 
-  private render(
+  private async render(
+    user: AuthenticatedUser,
     reportName: string,
     format: ExportFormat,
     report: ReportData,
   ): Promise<Buffer> {
-    return format === ExportFormat.pdf
-      ? renderReportPdf(reportName, report)
-      : renderReportExcel(reportName, report);
+    if (format !== ExportFormat.pdf)
+      return renderReportExcel(reportName, report);
+    // The company band at the head of the PDF (055); a report spanning companies has none.
+    const companyId = effectiveCompanyId(user);
+    const identity = companyId
+      ? await this.companies.getDocumentIdentity(companyId).catch(() => null)
+      : null;
+    return renderReportPdf(
+      reportName,
+      report,
+      identity
+        ? {
+            name: identity.name,
+            logo: identity.logo,
+            lines: identity.contactLines,
+          }
+        : undefined,
+    );
   }
 
   private audit(

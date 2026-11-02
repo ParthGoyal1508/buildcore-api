@@ -1160,15 +1160,19 @@ export class LettersService {
       ...presentLetterValues(letter.letterKind.key, variables),
       ...derived,
     });
+    // A letter written on the letterhead opens with the company band instead when the company
+    // has no letterhead to print on (055): plain paper with no name on it is no company's letter.
+    const letterhead = layout?.brandHeader
+      ? null
+      : await this.letterhead(template.letterheadAssetId, company);
     const pdf = await renderLetterPdf({
       title: layout?.title ?? letter.letterKind.label.toUpperCase(),
       body,
-      letterhead: layout?.brandHeader
-        ? null
-        : await this.letterhead(template.letterheadAssetId, company),
-      brandHeader: layout?.brandHeader
-        ? await this.brandHeader(company)
-        : undefined,
+      letterhead,
+      brandHeader:
+        layout?.brandHeader || !letterhead
+          ? await this.brandHeader(company)
+          : undefined,
       pageFooter: layout?.pageFooter?.(variables),
       referenceLabel: layout?.referenceLabel,
       titleFirst: layout?.titleFirst,
@@ -1230,35 +1234,19 @@ export class LettersService {
   }
 
   /**
-   * The logo-and-name band a work order or purchase order opens with (2026-10-14): the logo,
-   * the company name, and the registered office with whichever of phone, email and website
-   * Settings holds. A logo that cannot be read prints the name alone.
+   * The company band a work order or purchase order opens with (2026-10-14; since 055 the same
+   * lines every generated PDF prints — `CompaniesService.getBranchIdentity`'s `contactLines`: the
+   * registered and corporate offices, the issuing branch, phone, email and website). A logo that
+   * cannot be read prints the name alone.
    */
   private async brandHeader(
     company: {
       name: string;
       logoRef: string | null;
-      address: string | null;
-      city: string | null;
-      state: string | null;
-      pinCode: string | null;
-      phone: string | null;
-      email: string | null;
-      website: string | null;
-      /** 041: false for a branch, whose address is not the registered office. */
-      isHeadOffice?: boolean;
+      contactLines: string[];
     } | null,
   ): Promise<BrandHeader> {
     if (!company) return { logo: null, name: '', lines: [] };
-    // Each part once (2026-10-15): an address typed in full already names its city, state and
-    // PIN code, and joined to them again the F&F sheet's header said them twice.
-    const office = composeAddress(company);
-    const contact = [
-      company.phone ? `Ph: ${company.phone}` : null,
-      company.email ? `Email: ${company.email}` : null,
-    ]
-      .filter(Boolean)
-      .join('  |  ');
     let logo: Buffer | null = null;
     if (company.logoRef) {
       try {
@@ -1272,17 +1260,7 @@ export class LettersService {
     return {
       logo,
       name: company.name ?? '',
-      lines: [
-        office
-          ? `${
-              company.isHeadOffice === false
-                ? 'Branch Office'
-                : 'Registered Office'
-            }: ${office}`
-          : '',
-        contact,
-        company.website ? `Website: ${company.website}` : '',
-      ].filter(Boolean),
+      lines: company.contactLines ?? [],
     };
   }
 
