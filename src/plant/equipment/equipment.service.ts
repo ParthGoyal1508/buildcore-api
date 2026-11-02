@@ -982,11 +982,13 @@ export class EquipmentService {
       storedType,
     );
 
+    const expiresAt = dto.expiresAt ? this.refs.parseDate(dto.expiresAt) : null;
+    const paper = paperOfDocType(docType.name);
     const created = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) =>
-        tx.equipmentDocument.create({
+      async (tx) => {
+        const document = await tx.equipmentDocument.create({
           data: {
             companyId: equipment.companyId,
             equipmentId,
@@ -994,12 +996,27 @@ export class EquipmentService {
             fileRef,
             fileName: dto.fileName ?? null,
             mimeType: storedType,
-            expiresAt: dto.expiresAt
-              ? this.refs.parseDate(dto.expiresAt)
-              : null,
+            expiresAt,
             uploadedByUserId: caller.id,
           },
-        }),
+        });
+        // A renewed paper moves the register's date on with it (2026-11-02). Uploaded beside the
+        // lapsed one, it left the register — and its reminder — on the old date: the client saw
+        // "expired" reminders for papers they had just renewed. Only ever forward, and only for a
+        // paper the register holds.
+        if (paper && expiresAt) {
+          await tx.equipmentRegistrationItem.updateMany({
+            where: {
+              equipmentId,
+              kind: paper,
+              status: RegistrationStatus.held,
+              OR: [{ expiresAt: null }, { expiresAt: { lt: expiresAt } }],
+            },
+            data: { expiresAt },
+          });
+        }
+        return document;
+      },
     );
 
     await this.auditLog.record({
