@@ -55,6 +55,16 @@ location or photo verification fails."* This reverses the answer FR-013 original
 - Q: What GPS accuracy is acceptable before a punch is treated as unlocatable? → A: **A Super Admin setting, not a fixed figure.** The threshold is a company-level configuration under `COMPANY_SETTINGS`, changeable without a deploy, because the right number differs between an open site and a basement slab and the people who know which is which are not the people who deploy. It defaults to **50 metres** — the figure feature 013 already uses for labour muster fixes — and the rule inside it is benefit of the doubt: a punch counts as inside when its distance is within the fence radius plus its own reported accuracy, and is refused as unlocatable when the reported accuracy exceeds the configured maximum. The default rule was chosen alongside the setting; the client chose configurability over the fixed number, not a different rule.
 - Q: What face-match confidence refuses a punch? → A: **Unchanged from feature 003.** The decision of this session changes the consequence of a mismatch, not the matching. The existing threshold is the documented default of the matching mechanism 003 selected, the figure its published accuracy numbers are quoted at, and it is already loosenable per deployment for sites with harsh outdoor lighting. Re-tuning it because the consequence hardened would change two variables at once and make a rise in refusals unattributable.
 
+### Session 2026-11-02 (feature 057)
+
+Raised by the client after the block had shipped behind `punchBlockEnforced` (default off): a punch
+failing either check was still being recorded as an exception, and the refusal message did not say
+what had failed.
+
+- Q: Should the block now apply to every company? → A: **Yes — refuse, never record as an exception.** A migration sets `punchBlockEnforced` true for every company and makes true the default. The column, the service branches that read it and the Settings toggle's code are **kept**, with the toggle hidden, so a company can be switched back by an update and no release.
+- Q: What must a refusal tell the worker? → A: **What was measured, not only that it failed.** A location refusal quotes the distance from the site and the fence it was judged against; an unlocatable refusal quotes the phone's reported accuracy and the company's threshold and tells the worker to switch Location (GPS) on; a face refusal says whether no face was seen or the face did not match. The figures also travel in the 422 body as `detail`, so a client renders them in its own words (FR-013b).
+- Q: The phone will not give a location at all (permission refused, GPS off). What then? → A: **The app explains how to fix it on that device** — separate steps for an installed Android app, Android Chrome, iPhone (home-screen app and Safari) and desktop, and for location switched off — and asks for camera and location once, on first open, for anyone who marks attendance. A web app cannot open phone settings or pre-declare permissions; asking on a tap and explaining a refusal is the whole of what is available, and iOS may still ask again in later sessions.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - A thirsty machine costs its hirer money (Priority: P1)
@@ -240,7 +250,10 @@ attendance record created by either.
   refusals MUST therefore be correct by default, so that a reader added after this feature inherits the
   guarantee without being told about it.
 - **FR-013b**: System MUST return the failing check and its reason to the employee in the response to
-  the refused attempt.
+  the refused attempt, with the measured figures that justify it — distance and allowed fence for a
+  location refusal, reported accuracy and threshold for an unlocatable one — in a `detail` object and
+  in the message, and MUST word "no face seen" apart from "face did not match" (Clarifications,
+  2026-11-02).
 - **FR-012a**: System MUST treat a punch as inside its fence when the distance to the fence centre
   is within the fence radius plus the punch's own reported location accuracy, and MUST refuse the
   punch as unlocatable when that reported accuracy exceeds the configured maximum

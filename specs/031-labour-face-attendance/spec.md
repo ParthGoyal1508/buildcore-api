@@ -16,12 +16,17 @@ Extends feature 013 (labour management).
 - Q: What does the daily rate depend on? → A: Site × gender only (male/female), effective-dated.
 - Q: Which sites can a supervisor work? → A: Only the sites HR assigns them.
 
+### Session 2026-11-02 (feature 057)
+
+- Q: Is a labour punch outside the site area still accepted and flagged? → A: **No — refused**, like a face mismatch. `punchBlockEnforced` is now true for every company (see 020, Clarifications 2026-11-02); the flag and its code are kept so a company can be switched back without a release.
+- Q: What does the supervisor see when a punch is refused? → A: **The measured reason** — how far from the site against the allowed fence, the phone's accuracy against the threshold, or that no face was seen versus a face that did not match — and, for a location the phone cannot give, the steps to fix it on that device.
+
 ## Functional Requirements
 
 - **FR-001** A supervisor registers labour with name and gender (required), father's name and mobile (optional), at an assigned site, with 3–5 face photos in the same request. A photo with no detectable face fails the registration (400 `LABOUR_FACE_NOT_DETECTED`).
 - **FR-002** Labour codes (`LAB-0001`, …) come from a per-company counter (`LabourCodeSequence`), never reused, unique under concurrent registration; the counter starts past the highest code already issued.
 - **FR-003** A supervisor punches a labour in or out with a photo and GPS fix. A face that does not match the registered template, or a photo with no face, is **always refused** (422 `LABOUR_PUNCH_REFUSED_FACE`) and nothing is written to attendance.
-- **FR-004** Location follows the employee punch rule (020): the company's accuracy limit and the site geofence; refused (422 `LABOUR_PUNCH_REFUSED_LOCATION` / `_UNLOCATABLE`) when the company enforces the punch block, otherwise accepted and flagged.
+- **FR-004** Location follows the employee punch rule (020): the company's accuracy limit and the site geofence; refused (422 `LABOUR_PUNCH_REFUSED_LOCATION` / `_UNLOCATABLE`) when the company enforces the punch block — every company since 057 — otherwise accepted and flagged. A refusal carries the measured `detail` (distance and allowed fence, or accuracy and threshold) and says it in the message (020 FR-013b).
 - **FR-005** One punch-in and one punch-out per labour per day; out requires in (409 `LABOUR_NOT_PUNCHED_IN`, `LABOUR_ALREADY_PUNCHED`). The server clock decides the day; punching is online-only.
 - **FR-006** Every refused punch is logged (`LabourPunchRefusal`) and listed to the supervisor.
 - **FR-007** Accepted punches write one muster roll per site and day (`source = face_punch`, approved), with a half-day line on punch-in upgraded to full day on punch-out, so payment sheets, reports and project costing read them unchanged. Manual muster capture routes are removed; approval of pre-031 musters remains.

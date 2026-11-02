@@ -349,23 +349,18 @@ had made a decision nobody made.
 
 Deliberately **not** feature 013\'s `WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES`: same units,
 different surface, different tolerance. Merging them means tuning one to fix the other.']
-  punchBlockEnforced Boolean [not null, default: false, note: 'Whether a punch that fails location or face validation is **refused** rather than recorded as
+  punchBlockEnforced Boolean [not null, default: true, note: 'Whether a punch that fails location or face validation is **refused** rather than recorded as
 an exception for an admin (020 FR-013).
 
-**Default false, and that is the point.** The client accepted the hard block\'s cost without
-knowing how often it would fire, and `PunchRefusal` is accumulating that figure right now while
-punches are still being accepted. Shipping the inversion switched on would spend the only
-moment at which their decision is cheap to reverse — so the code ships and the behaviour does
-not, and the answer they give becomes a settings change rather than a release.
+**Default true since 057 (2026-11-02).** It shipped false so the refusal log could measure how
+often the block would fire before the client decided; they have now decided, and a punch that
+fails either check is refused for every company. The column and every branch that reads it are
+kept on purpose — the Settings toggle is only hidden — so one company can still be switched back
+to "record as an exception" with an UPDATE and no deploy.
 
-It also keeps the decision cheap in **both** directions afterwards. One company can be switched
-on, watched for a fortnight against its own refusal log, and switched off again without a
-deploy.
-
-What a flag cannot do is make the branch safe by never running. A dormant path is untested in
-production until the day somebody turns it on, which is why every test of the refusal path runs
-with enforcement forced on rather than inheriting this default — see `punch.service.spec.ts`.
-The flag decides whose punches are refused, never whether the code is exercised.']
+Every test of the refusal path forces enforcement on rather than inheriting this default — see
+`punch.service.spec.ts` — so the flag decides whose punches are refused, never whether the code
+is exercised.']
   deductionCeilingPercent Int [not null, default: 50, note: 'The ceiling on **total** deductions from one payslip, as a percentage of its gross wages
 (020 FR-007a).
 

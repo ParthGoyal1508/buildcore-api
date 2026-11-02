@@ -468,7 +468,16 @@ export class PunchService {
         employee.companyId,
       );
       if (enforced) {
-        throw punchRefusedException(refusalReason);
+        throw punchRefusedException(refusalReason, {
+          // An unlocatable fix gets no distance: it is measured from a position nobody trusts.
+          distanceMeters: unlocatable ? undefined : distanceMeters,
+          // The same fence `checkGeofence` judged against — radius plus the accuracy allowance.
+          allowedMeters:
+            geofence.geofenceRadiusMeters +
+            (unlocatable ? 0 : dto.accuracyMeters ?? 0),
+          accuracyMeters: dto.accuracyMeters,
+          accuracyMaxMeters: accuracyMax,
+        });
       }
     }
 

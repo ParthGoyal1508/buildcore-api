@@ -366,7 +366,14 @@ export class LabourPunchService {
           },
         }),
       );
-      throw labourPunchRefused(refusal);
+      throw labourPunchRefused(refusal, {
+        distanceMeters: unlocatable ? undefined : distanceMeters,
+        allowedMeters:
+          geofence.geofenceRadiusMeters +
+          (unlocatable ? 0 : dto.accuracyMeters ?? 0),
+        accuracyMeters: dto.accuracyMeters,
+        accuracyMaxMeters: accuracyMax,
+      });
     }
 
     // Stored only once accepted: a refused photo would be an orphan nothing references.
