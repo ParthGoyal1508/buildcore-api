@@ -25,13 +25,13 @@ against the local scratch or e2e databases only.
 
 ## Phase 2: Foundational (blocking)
 
-- [ ] T002 Add the 058 schema changes to API/prisma/schema.prisma:
+- [X] T002 Add the 058 schema changes to API/prisma/schema.prisma:
   - new model `EmployeeLocationAssignmentTarget` (`@@schema("hr")`; fields per data-model.md)
   - relation `targets` on `EmployeeLocationAssignment`; remove `siteId` from it
   - `siteId String?` + `@@index([siteId, punchDate])` on `PunchRecord`
   - `siteId String?` on `PunchRefusal`
   - `allCompanies Boolean @default(false)` on `Role`
-- [ ] T003 Create migration API/prisma/migrations/20261106120000_058_site_attendance_multi_company/migration.sql, in this order:
+- [X] T003 Create migration API/prisma/migrations/20261106120000_058_site_attendance_multi_company/migration.sql, in this order:
   1. Create the target table with the `(siteId IS NULL) <> (projectId IS NULL)` check, a unique `(assignmentId, siteId, projectId)` and the indexes; enable RLS with the `tenant_isolation` policy (copy the shape from the `EmployeeLocationAssignment` policy migration) and grant to `buildcore_app` as other hr tables do.
   2. Insert one target per existing assignment with a non-null `siteId`.
   3. Add `PunchRecord.siteId` + index and `PunchRefusal.siteId`.
@@ -40,7 +40,7 @@ against the local scratch or e2e databases only.
   6. Add `Role.allCompanies`.
 
   Then run `npx prisma migrate dev` against scratch and `npx prisma generate`.
-- [ ] T004 [P] Add 058 constants to API/src/hr/location-assignments/location-assignments.constants.ts (create): `ASSIGNMENT_EMPTY`, `ASSIGNMENT_MOBILE_WITH_TARGETS`, `PROJECT_HAS_NO_ACTIVE_SITE`, `SITE_NOT_ASSIGNED`. Add `ALL_COMPANIES_SUPER_ADMIN_ONLY` to API/src/settings/roles/roles.constants.ts (create if absent)
+- [X] T004 [P] Add 058 constants to API/src/hr/location-assignments/location-assignments.constants.ts (create): `ASSIGNMENT_EMPTY`, `ASSIGNMENT_MOBILE_WITH_TARGETS`, `PROJECT_HAS_NO_ACTIVE_SITE`, `SITE_NOT_ASSIGNED`. Add `ALL_COMPANIES_SUPER_ADMIN_ONLY` to API/src/settings/roles/roles.constants.ts (create if absent)
 
 **Checkpoint**: the schema and client compile (`npm run build`), and existing tests still pass apart from those that reference `EmployeeLocationAssignment.siteId`. Those are fixed in US2.
 
@@ -80,7 +80,7 @@ behave as before.
 
 ### Tests first
 
-- [ ] T012 [P] [US2] Unit tests for the matcher in API/src/hr/punch/site-match.spec.ts:
+- [X] T012 [P] [US2] Unit tests for the matcher in API/src/hr/punch/site-match.spec.ts:
   - in A
   - in B
   - in the overlap (nearest centre wins)
@@ -89,7 +89,7 @@ behave as before.
   - mobile (no site)
   - no assignment (employee site)
   - every candidate inactive (the existing "no longer in service" 400)
-- [ ] T013 [P] [US2] Unit tests for assignment validation in API/src/hr/location-assignments/location-assignments.service.spec.ts:
+- [X] T013 [P] [US2] Unit tests for assignment validation in API/src/hr/location-assignments/location-assignments.service.spec.ts:
   - empty → `ASSIGNMENT_EMPTY`
   - mobile with targets → `ASSIGNMENT_MOBILE_WITH_TARGETS`
   - other-company site or project → 404
@@ -98,36 +98,36 @@ behave as before.
 
 ### Implementation (API)
 
-- [ ] T014 [US2] Add `geofencesFor(ctx, { siteIds, projectIds }): Promise<SiteGeofence[]>` in API/src/projects/sites/sites.service.ts. It returns **active** sites only, de-duplicated by id, each with `{ id, name, latitude, longitude, geofenceRadiusMeters }`. Projects resolve to all their active sites. Add a `namesFor(ctx, siteIds)` helper for display. Unit-test both in API/src/projects/sites/sites.service.spec.ts
-- [ ] T015 [US2] Rework API/src/hr/location-assignments/location-assignments.service.ts:
+- [X] T014 [US2] Add `geofencesFor(ctx, { siteIds, projectIds }): Promise<SiteGeofence[]>` in API/src/projects/sites/sites.service.ts. It returns **active** sites only, de-duplicated by id, each with `{ id, name, latitude, longitude, geofenceRadiusMeters }`. Projects resolve to all their active sites. Add a `namesFor(ctx, siteIds)` helper for display. Unit-test both in API/src/projects/sites/sites.service.spec.ts
+- [X] T015 [US2] Rework API/src/hr/location-assignments/location-assignments.service.ts:
   - `inForceOn` returns `{ isMobile, targets: { siteId, projectId }[] }`
   - `assign` validates per data-model.md through a new `SitesService.assertTargetsInCompany(ctx, companyId, { siteIds, projectIds })` in API/src/projects/sites/sites.service.ts. It is the projects module's own read of `projects.Site`/`projects.Project`, which keeps Constitution I (hr never queries projects tables). It returns the projects with no active site for the warning. `assign` creates targets in the same transaction, writes an `AuditLogService` entry (employee, targets, effectiveFrom, assignedBy) per FR-014, and returns `warnings`
   - `historyFor` includes targets with names
-- [ ] T016 [US2] Update API/src/hr/location-assignments/dto/location-assignment.dto.ts: `siteIds?: string[]`, `projectIds?: string[]`, the deprecated `siteId?: string` mapped to `siteIds`, `isMobile?`, `effectiveFrom`, `reason?`. Update API/src/hr/location-assignments/location-assignments.controller.ts Swagger and response shape per contracts/api-changes.md
-- [ ] T017 [US2] Extract the candidate-and-nearest logic into API/src/hr/punch/site-match.ts (pure function over `checkGeofence` results, with the accuracy and unlocatable handling unchanged). Wire it into API/src/hr/punch/punch.service.ts, replacing the single `getGeofence(assignment?.siteId ?? employee.siteId)`:
+- [X] T016 [US2] Update API/src/hr/location-assignments/dto/location-assignment.dto.ts: `siteIds?: string[]`, `projectIds?: string[]`, the deprecated `siteId?: string` mapped to `siteIds`, `isMobile?`, `effectiveFrom`, `reason?`. Update API/src/hr/location-assignments/location-assignments.controller.ts Swagger and response shape per contracts/api-changes.md
+- [X] T017 [US2] Extract the candidate-and-nearest logic into API/src/hr/punch/site-match.ts (pure function over `checkGeofence` results, with the accuracy and unlocatable handling unchanged). Wire it into API/src/hr/punch/punch.service.ts, replacing the single `getGeofence(assignment?.siteId ?? employee.siteId)`:
   - candidates come from `geofencesFor` (assignment targets) or `[employee.siteId]`
   - `PunchRecord.siteId` = matched site (null when mobile)
   - `PunchRefusal.siteId` = nearest candidate
   - the punch response gains `site`
 
   Make T012 pass.
-- [ ] T018 [US2] Update API/src/hr/punch/punch-refusals.service.ts so HR refusal rows return `site: { id, name } | null`
-- [ ] T019 [US2] Daily register in API/src/hr/attendance/attendance-admin.service.ts `daily()`:
+- [X] T018 [US2] Update API/src/hr/punch/punch-refusals.service.ts so HR refusal rows return `site: { id, name } | null`
+- [X] T019 [US2] Daily register in API/src/hr/attendance/attendance-admin.service.ts `daily()`:
   - add `punchInSite` and `punchOutSite` to `DailyAttendanceRow`
   - add an optional `siteId` filter (rows with a punch in or out at that site)
   - add the query param to the controller DTO in API/src/hr/attendance/attendance-admin.controller.ts
   - names come from `SitesService.namesFor`
-- [ ] T020 [US2] Add `punchInSite` and `punchOutSite` to each day in `employeeMonth()` (API/src/hr/attendance/attendance-admin.service.ts) and in API/src/hr/punch/attendance-history.service.ts (own history)
-- [ ] T021 [US2] Add optional `siteId` to API/src/hr/attendance/dto/mark-attendance.dto.ts. In `mark()`, `submitCorrection()` and `upsertSide()` (API/src/hr/attendance/attendance-admin.service.ts):
+- [X] T020 [US2] Add `punchInSite` and `punchOutSite` to each day in `employeeMonth()` (API/src/hr/attendance/attendance-admin.service.ts) and in API/src/hr/punch/attendance-history.service.ts (own history)
+- [X] T021 [US2] Add optional `siteId` to API/src/hr/attendance/dto/mark-attendance.dto.ts. In `mark()`, `submitCorrection()` and `upsertSide()` (API/src/hr/attendance/attendance-admin.service.ts):
   - validate the site against the employee's covered sites on that day, or any active company site when the employee is mobile, else 400 `SITE_NOT_ASSIGNED`
   - when the site is omitted and exactly one site is covered, use it
   - store it on the created `PunchRecord`
-- [ ] T022 [US2] Fix every remaining compile or test break from the dropped `EmployeeLocationAssignment.siteId`. Grep API/src and API/test for `siteId` on assignments (the bulk paths, the attendance-exception reconciler, fixtures) and adapt them to `targets`
-- [ ] T023 [P] [US2] Migration check: an e2e or SQL fixture test in API/test/site-attendance.e2e-spec.ts asserting:
+- [X] T022 [US2] Fix every remaining compile or test break from the dropped `EmployeeLocationAssignment.siteId`. Grep API/src and API/test for `siteId` on assignments (the bulk paths, the attendance-exception reconciler, fixtures) and adapt them to `targets`
+- [X] T023 [P] [US2] Migration check (done 2026-11-06 as a one-off run on a pre-058 copy of the local DB, `buildcore_058_mig`, not a committed jest test. All 6 punch cases and the assignment→target move came out as designed; the copy was dropped after): an e2e or SQL fixture test in API/test/site-attendance.e2e-spec.ts asserting:
   - the backfill fills in-range employee punches with the assignment's site, or else the employee's site
   - mobile, admin and out-of-range punches stay null
   - old single-site assignments became one target
-- [ ] T024 [P] [US2] e2e in API/test/site-attendance.e2e-spec.ts:
+- [X] T024 [P] [US2] e2e in API/test/site-attendance.e2e-spec.ts:
   - assign project P (sites A and B), punch at A and then at B, and assert the sites on the register
   - the register `siteId` filter
   - a mark with a site outside the coverage → 400
@@ -135,14 +135,14 @@ behave as before.
 
 ### Implementation (WEB)
 
-- [ ] T025 [US2] In WEB/app/lib/api/hr-payroll.ts (or wherever assignments are typed), update the types and calls: assignment `targets`, `siteIds`/`projectIds`, `warnings`; `DailyAttendanceRow.punchInSite`/`punchOutSite`; the register `siteId` param; mark `siteId`
-- [ ] T026 [US2] WEB/app/ui/hr/location-assignment.tsx and WEB/app/ui/hr/bulk-location-assignment.tsx:
+- [X] T025 [US2] In WEB/app/lib/api/hr-payroll.ts (or wherever assignments are typed), update the types and calls: assignment `targets`, `siteIds`/`projectIds`, `warnings`; `DailyAttendanceRow.punchInSite`/`punchOutSite`; the register `siteId` param; mark `siteId`
+- [X] T026 [US2] WEB/app/ui/hr/location-assignment.tsx and WEB/app/ui/hr/bulk-location-assignment.tsx:
   - replace the single site select with a multi-select of sites and projects (projects labelled "all sites of …"), keeping the Mobile option exclusive
   - show history rows as a target list
   - surface the `PROJECT_HAS_NO_ACTIVE_SITE` warning
-- [ ] T027 [US2] WEB/app/ui/hr/attendance-table.tsx: add In site / Out site columns, a site filter (sites of the company), and the two columns in the Excel download. Add an optional site select, limited to the employee's covered sites, to the manual mark and correction form
-- [ ] T028 [P] [US2] Show the site per day in WEB/app/ui/my/attendance-history.tsx, and in the employee month view used by HR (find the component that renders `GET /hr/attendance/employee/:id`)
-- [ ] T029 [US2] Run lint and typecheck in both repos and `npm test` in API/. Visual check against the local API with seeded sites:
+- [X] T027 [US2] WEB/app/ui/hr/attendance-table.tsx (note: the daily register has no Excel download. The only one on that screen is the monthly sheet, which stays home-site per the clarification, so no export column was added): add In site / Out site columns, a site filter (sites of the company), and the two columns in the Excel download. Add an optional site select, limited to the employee's covered sites, to the manual mark and correction form
+- [X] T028 [P] [US2] Show the site per day in WEB/app/ui/my/attendance-history.tsx, and in the employee month view used by HR (find the component that renders `GET /hr/attendance/employee/:id`)
+- [X] T029 [US2] Run lint and typecheck in both repos and `npm test` in API/. Visual check against the local API with seeded sites:
   - open the assignment dialog with two sites plus a project
   - the register with the site filter open
   - the mark form site select

@@ -1,28 +1,57 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsISO8601,
   IsOptional,
   IsString,
   MaxLength,
-  ValidateIf,
 } from 'class-validator';
 
 /**
- * Assigning the location an employee's punches validate against (020 FR-011, FR-014).
+ * Assigning the locations an employee's punches validate against (020 FR-011, FR-014; 058).
  *
  * Every write **appends**. There is no update DTO and no id to update, deliberately: a transfer six
  * months ago has to stay explicable, and a mutable current value cannot answer that.
+ *
+ * "Mobile, or at least one site or project" is checked by the service, which answers with
+ * `ASSIGNMENT_EMPTY` or `ASSIGNMENT_MOBILE_WITH_TARGETS`.
  */
 export class AssignLocationDto {
   @ApiPropertyOptional({
+    type: [String],
     description:
-      'The site whose fence applies. Required unless `isMobile` — an assignment naming no ' +
-      'site and claiming no exemption validates nothing, and the database rejects it.',
+      'Sites whose fences apply (058). A punch inside any of them is accepted and recorded ' +
+      'against the nearest.',
   })
-  // Required precisely when there is no exemption — the same rule the check constraint enforces,
-  // stated here too so the caller gets a 400 naming the field rather than a 500 from Postgres.
-  @ValidateIf((dto: AssignLocationDto) => !dto.isMobile)
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MaxLength(200, { each: true })
+  siteIds?: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Projects (058): every **active** site of each, resolved at the moment of each punch — a ' +
+      'site added to the project later is covered without a new assignment.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MaxLength(200, { each: true })
+  projectIds?: string[];
+
+  @ApiPropertyOptional({
+    deprecated: true,
+    description:
+      'The single site of an assignment before 058. Still accepted for one release, read as ' +
+      '`siteIds: [siteId]`, so a web build that predates 058 keeps working.',
+  })
+  @IsOptional()
   @IsString()
   @MaxLength(200)
   siteId?: string;
@@ -31,7 +60,7 @@ export class AssignLocationDto {
     description:
       'Exempt from **location** validation only (FR-014). A mobile employee is refused for a ' +
       'face mismatch exactly as anyone else is: mobility says where a person legitimately ' +
-      'works, the face check says who is holding the phone.',
+      'works, the face check says who is holding the phone. Excludes sites and projects.',
   })
   @IsOptional()
   @IsBoolean()
@@ -55,4 +84,15 @@ export class AssignLocationDto {
   @IsString()
   @MaxLength(500)
   reason?: string;
+}
+
+/** The body as the service reads it: the deprecated single `siteId` folded into `siteIds`. */
+export function assignInputFrom(dto: AssignLocationDto) {
+  return {
+    siteIds: [...(dto.siteIds ?? []), ...(dto.siteId ? [dto.siteId] : [])],
+    projectIds: dto.projectIds ?? [],
+    isMobile: dto.isMobile,
+    effectiveFrom: dto.effectiveFrom,
+    reason: dto.reason,
+  };
 }

@@ -60,8 +60,11 @@ the refusal detail carries that site's name.
 
 ## Attendance views (FR-011)
 
-- **`GET /hr/attendance?date=…&siteId=…`**: new optional `siteId` filter. Each row gains
-  `punchInSite` and `punchOutSite` (`{ id, name } | null`).
+- **`GET /hr/attendance?date=…&punchSiteId=…`**: new optional `punchSiteId` filter, for employees
+  with a punch in or out made **at** that site. The existing `siteId` keeps its meaning: employees
+  posted at that home site, punched or not (decided during implementation so the register's
+  site view doesn't change). Each row gains `punchInSite` and `punchOutSite`
+  (`{ id, name } | null`).
 - **`GET /hr/attendance/employee/:employeeId?month=…`**: each day gains `punchInSite` and
   `punchOutSite`.
 - **`GET /my/punch/history?month=&year=`**: each day gains `punchInSite` and `punchOutSite`.

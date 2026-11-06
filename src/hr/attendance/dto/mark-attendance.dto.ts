@@ -56,6 +56,17 @@ export class MarkAttendanceDto {
   @IsString()
   @MaxLength(500)
   remarks?: string;
+  @ApiPropertyOptional({
+    description:
+      'The site the punches are recorded against (058). One of the sites the employee is ' +
+      'assigned to that day, or any active site of the company for a mobile employee; 400 ' +
+      '`SITE_NOT_ASSIGNED` otherwise. Omitted, the employee\u2019s only site is used when they ' +
+      'have exactly one, and none is recorded when they have several.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  siteId?: string;
 }
 
 /** Date + site scoping for the admin daily attendance view. */
@@ -64,11 +75,24 @@ export class DailyAttendanceQueryDto {
   @Matches(DATE_ONLY, { message: 'date must be YYYY-MM-DD' })
   date: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Employees posted at this site (their home site), whether or not they punched.',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(100)
   siteId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Only employees with a punch in or out **at** this site that day (058) — "who punched at ' +
+      'site X on day D", whatever their home site.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  punchSiteId?: string;
 }
 
 /** Filters for the Modifications audit view. */

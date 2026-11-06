@@ -1426,7 +1426,10 @@ async function assignLocations(
     const site = p.sites.get(e.siteId);
     const from =
       e.dateOfJoining && e.dateOfJoining > goLive ? e.dateOfJoining : goLive;
-    const rows: Prisma.EmployeeLocationAssignmentCreateManyInput[] = [];
+    // 058: an assignment's site is a target row, so each is created with its target.
+    const rows: (Prisma.EmployeeLocationAssignmentCreateManyInput & {
+      siteId: string | null;
+    })[] = [];
     if (role === 'Project Manager' || role === 'Director') {
       // Exempt from the fence: they move between every camp in a day.
       rows.push({
@@ -1483,7 +1486,16 @@ async function assignLocations(
         });
       }
     }
-    await prisma.employeeLocationAssignment.createMany({ data: rows });
+    for (const { siteId, ...row } of rows) {
+      await prisma.employeeLocationAssignment.create({
+        data: {
+          ...row,
+          ...(siteId
+            ? { targets: { create: [{ companyId: company.id, siteId }] } }
+            : {}),
+        },
+      });
+    }
     count += rows.length;
   }
   return count;

@@ -36,6 +36,7 @@ const WRITE_TABLES: { schema: string; table: string }[] = [
   { schema: 'settings', table: 'Company' },
   { schema: 'hr', table: 'Employee' },
   { schema: 'hr', table: 'EmployeeLocationAssignment' },
+  { schema: 'hr', table: 'EmployeeLocationAssignmentTarget' },
 ];
 
 function probeUrl(adminUrl: string): string {
@@ -106,11 +107,13 @@ describe('020 location assignments, under a role that cannot bypass RLS (T041)',
       // this suite assumed it did not and failed on the insert. `hr.Employee` itself carries none,
       // so one bare row per company is the whole of the fixture.
       await admin.$executeRawUnsafe(
-        `INSERT INTO "hr"."Employee" ("id","userId","companyId","siteId","shiftId","employeeCode","updatedAt","createdAt")
-         VALUES ($1,$2,$3,$4,$5,$6,NOW(),NOW())`,
+        `INSERT INTO "hr"."Employee" ("id","userId","companyId","branchId","siteId","shiftId","employeeCode","updatedAt","createdAt")
+         VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),NOW())`,
         `${companyId}-emp`,
         `${companyId}-user`,
         companyId,
+        // Required since 041; a bare id, like the site and shift — no foreign key to satisfy.
+        `${companyId}-branch`,
         `${companyId}-site`,
         `${companyId}-shift`,
         `${companyId.slice(0, 12)}-E1`,
@@ -118,13 +121,21 @@ describe('020 location assignments, under a role that cannot bypass RLS (T041)',
 
       const assignmentId = `${companyId}-assign`;
       await admin.$executeRawUnsafe(
-        `INSERT INTO "hr"."EmployeeLocationAssignment" ("id","companyId","employeeId","siteId","isMobile","effectiveFrom","assignedByUserId","createdAt")
-         VALUES ($1,$2,$3,$4,$5,NOW(),'system',NOW())`,
+        `INSERT INTO "hr"."EmployeeLocationAssignment" ("id","companyId","employeeId","isMobile","effectiveFrom","assignedByUserId","createdAt")
+         VALUES ($1,$2,$3,$4,NOW(),'system',NOW())`,
         assignmentId,
         companyId,
         `${companyId}-emp`,
-        `${companyId}-site`,
         false,
+      );
+      // 058: the assignment's site is a target row, under the same policy.
+      await admin.$executeRawUnsafe(
+        `INSERT INTO "hr"."EmployeeLocationAssignmentTarget" ("id","companyId","assignmentId","siteId")
+         VALUES ($1,$2,$3,$4)`,
+        `${assignmentId}-target`,
+        companyId,
+        assignmentId,
+        `${companyId}-site`,
       );
 
       if (key === 'A') ids.assignmentA = assignmentId;
@@ -145,6 +156,7 @@ describe('020 location assignments, under a role that cannot bypass RLS (T041)',
 
     for (const companyId of [ids.companyA, ids.companyB]) {
       for (const sql of [
+        `DELETE FROM "hr"."EmployeeLocationAssignmentTarget" WHERE "companyId" = $1`,
         `DELETE FROM "hr"."EmployeeLocationAssignment" WHERE "companyId" = $1`,
         `DELETE FROM "hr"."Employee" WHERE "companyId" = $1`,
         `DELETE FROM "settings"."Company" WHERE "id" = $1`,
@@ -233,6 +245,19 @@ describe('020 location assignments, under a role that cannot bypass RLS (T041)',
     expect(rows.map((r) => r.id)).not.toContain(ids.assignmentB);
   });
 
+  it('hides another company’s assignment targets (058)', async () => {
+    guard();
+
+    const rows = await asCompany(ids.companyA, (tx) =>
+      tx.$queryRawUnsafe<{ assignmentId: string }[]>(
+        `SELECT "assignmentId" FROM "hr"."EmployeeLocationAssignmentTarget"`,
+      ),
+    );
+
+    expect(rows.map((r) => r.assignmentId)).toContain(ids.assignmentA);
+    expect(rows.map((r) => r.assignmentId)).not.toContain(ids.assignmentB);
+  });
+
   it('refuses to exempt another company’s employee from their geofence', async () => {
     guard();
 
@@ -260,8 +285,8 @@ describe('020 location assignments, under a role that cannot bypass RLS (T041)',
     await expect(
       asCompany(ids.companyA, (tx) =>
         tx.$executeRawUnsafe(
-          `INSERT INTO "hr"."EmployeeLocationAssignment" ("id","companyId","employeeId","siteId","isMobile","effectiveFrom","assignedByUserId","createdAt")
-           VALUES ($1,$2,$3,NULL,true,NOW(),'smuggled',NOW())`,
+          `INSERT INTO "hr"."EmployeeLocationAssignment" ("id","companyId","employeeId","isMobile","effectiveFrom","assignedByUserId","createdAt")
+           VALUES ($1,$2,$3,true,NOW(),'smuggled',NOW())`,
           `${ids.companyA}-smuggle`,
           ids.companyB,
           `${ids.companyB}-emp`,

@@ -212,6 +212,11 @@ model Role {
   /// one role carries it — a partial unique index in the migration, since Prisma cannot
   /// express "unique where true". Seeded on "General User".
   isDefault       Boolean          @default(false)
+  /// "Works in all companies" (058). Holders may switch between every active company of the group,
+  /// working in one at a time with only this role's modules. **Not** Super Admin: none of
+  /// `CROSS_COMPANY_ACCESS`'s group powers come with it. Only a Super Admin may set it, or give a
+  /// user a role that has it.
+  allCompanies    Boolean          @default(false)
   /// Where a holder of this role lands after signing in (029 FR-020): a module key from
   /// `HOME_MODULES` (src/settings/roles/home-modules.ts), never a URL — the frontend owns
   /// the routes, and a stored path would be a redirect target an editor could aim anywhere.
@@ -531,16 +536,16 @@ model Company {
   cin   String?
   tan   String?
 
-  address String?
-  city    String?
-  state   String?
-  pinCode String?
+  address          String?
+  city             String?
+  state            String?
+  pinCode          String?
   /// How the company is reached, printed under its name at the head of a work order or purchase
   /// order (2026-10-14) — the client's formats carry "Ph:", "Email:" and "Website:" beside the
   /// registered office. Optional: a document prints the lines that are filled.
-  phone   String?
-  email   String?
-  website String?
+  phone            String?
+  email            String?
+  website          String?
   /// The corporate office, where it differs from the registered office (055, 2026-11-02). Printed
   /// under the registered office at the head of every generated PDF; blank prints nothing.
   corporateAddress String?
@@ -4135,6 +4140,11 @@ model PunchRecord {
   /// `faceMatchDistance`.
   geofenceDistanceMeters Decimal?        @db.Decimal(10, 2)
 
+  /// The site the punch was matched to (058): the nearest covered site whose fence contains it.
+  /// Null for a mobile employee, for an admin punch entered without a site, and for punches from
+  /// before 058 whose site could not be known for certain. Bare id into `projects.Site`.
+  siteId String?
+
   /// On a punch-in, the id of the punch-out that closed it; null while the punch-in
   /// is still open. This is what makes "at most one open punch-in per employee"
   /// (FR-008) enforceable as a partial unique index in the database, instead of
@@ -4181,6 +4191,7 @@ model PunchRecord {
   @@index([employeeId, capturedAt])
   @@index([employeeId, punchDate])
   @@index([exceptionResolution])
+  @@index([siteId, punchDate])
   @@schema("hr")
 }
 
@@ -4702,6 +4713,8 @@ model PunchRefusal {
   latitude       Decimal  @db.Decimal(10, 7)
   longitude      Decimal  @db.Decimal(10, 7)
   distanceMeters Decimal? @db.Decimal(12, 2)
+  /// The nearest covered site (058), which `distanceMeters` is measured from. Bare id.
+  siteId         String?
   accuracyMeters Int?
 
   /// The face-match distance, when a comparison happened at all. A number, not a biometric.
@@ -4746,8 +4759,10 @@ model EmployeeLocationAssignment {
   employeeId String
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
-  /// The site whose fence applies. Null **only** when `isMobile` — see the check constraint.
-  siteId String?
+  /// Where the employee may punch (058): one row per site or project. Empty **only** when
+  /// `isMobile`, which the service enforces (a check constraint cannot look across rows). Replaces
+  /// the single `siteId` this table had before 058; existing values were moved into targets.
+  targets EmployeeLocationAssignmentTarget[]
 
   /// FR-014's exemption, and it lives here rather than on `Employee` on purpose: exempting somebody
   /// from location validation is a dated, attributable act, not a property of the person. On
@@ -4772,6 +4787,29 @@ model EmployeeLocationAssignment {
 
   /// The resolution query's access path, and the only way this table is read on the punch path.
   @@index([employeeId, effectiveFrom])
+  @@schema("hr")
+}
+
+/// One place an assignment covers (058): a site, or a whole project — every **active** site of the
+/// project at the moment of each punch, so a site added to the project later is covered without
+/// touching the assignment. Exactly one of `siteId` and `projectId` (check constraint).
+///
+/// Both are bare ids into `projects`, as `Employee.siteId` is: hr never reads projects tables
+/// (Principle I), so resolution goes through `SitesService.geofencesFor`.
+model EmployeeLocationAssignmentTarget {
+  id        String @id @default(cuid())
+  /// RLS discriminator, copied from the assignment.
+  companyId String
+
+  assignmentId String
+  assignment   EmployeeLocationAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  siteId    String?
+  projectId String?
+
+  @@unique([assignmentId, siteId, projectId])
+  @@index([companyId])
+  @@index([assignmentId])
   @@schema("hr")
 }
 

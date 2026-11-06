@@ -56,6 +56,9 @@ import {
   type AttendanceStatus,
 } from '../punch/attendance-history.service';
 import { ReferenceDataService } from '../../settings/reference-data/reference-data.service';
+import { SitesService } from '../../projects/sites/sites.service';
+import { LocationAssignmentsService } from '../location-assignments/location-assignments.service';
+import { SITE_NOT_ASSIGNED } from '../location-assignments/location-assignments.constants';
 import {
   dayCompliance,
   summarise,
@@ -100,6 +103,9 @@ export interface DailyAttendanceRow {
   inHasPhoto: boolean;
   outPunchId: string | null;
   outHasPhoto: boolean;
+  /** Where each punch was made (058); null for a mobile employee or a punch with no site. */
+  punchInSite: { id: string; name: string } | null;
+  punchOutSite: { id: string; name: string } | null;
   /**
    * A correction asked for on this employee-day and not yet applied (016 FR-012, web T050).
    *
@@ -156,6 +162,10 @@ export class AttendanceAdminService {
     // step. `hr` submits and listens; it never reads a spine table (Principle I).
     private readonly approvals: ApprovalService,
     private readonly events: EventEmitter2,
+    // 058: where a punch was made is named through the projects module, and which sites an
+    // employee may punch at is the assignment's to say (Principle I).
+    private readonly sites: SitesService,
+    private readonly assignments: LocationAssignmentsService,
     configService: ConfigService,
   ) {
     this.timeZone = configService.get<SettingsConfig>('settings').timezone;
@@ -199,7 +209,13 @@ export class AttendanceAdminService {
   private async validateCorrection(
     caller: Caller,
     dto: MarkAttendanceDto,
-  ): Promise<{ id: string; companyId: string; name?: string | null }> {
+  ): Promise<{
+    id: string;
+    companyId: string;
+    name?: string | null;
+    /** The site the punches will be recorded against (058 FR-012), checked; null for none. */
+    siteId: string | null;
+  }> {
     if (!dto.inTime && !dto.outTime && !dto.statusOverride) {
       throw new BadRequestException(
         'Provide at least one of inTime, outTime or statusOverride.',
@@ -212,12 +228,13 @@ export class AttendanceAdminService {
     const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.employee.findFirst({
         where: { id: dto.employeeId },
-        select: { companyId: true, ...EMPLOYEE_NAME_SELECT },
+        select: { companyId: true, siteId: true, ...EMPLOYEE_NAME_SELECT },
       }),
     );
     if (!employee) throw new NotFoundException('Employee not found');
 
     this.assertNotFuture(dto.date);
+    const siteId = await this.manualPunchSite(caller, employee, dto);
 
     const date = new Date(`${dto.date}T00:00:00.000Z`);
     const lockDay = await this.companies.getPayrollLockDay(employee.companyId);
@@ -273,7 +290,42 @@ export class AttendanceAdminService {
       id: employee.id,
       companyId: employee.companyId,
       name: employeeNameOf(employee) ?? employee.employeeCode,
+      siteId,
     };
+  }
+
+  /**
+   * The site an HR-entered punch is recorded against (058 FR-012).
+   *
+   * Named: it must be one the employee may punch at that day — an assigned site, or any active site
+   * of the company for a mobile employee — else 400 `SITE_NOT_ASSIGNED`. Not named: the employee's
+   * only site when they have exactly one, and none when they have several, because guessing which
+   * of several would put a fact in the register nobody stated.
+   */
+  private async manualPunchSite(
+    caller: Caller,
+    employee: { id: string; siteId: string; companyId: string },
+    dto: MarkAttendanceDto,
+  ): Promise<string | null> {
+    const covered = await this.assignments.coveredSiteIds(
+      caller.rls,
+      employee,
+      dto.date,
+    );
+    if (!dto.siteId) {
+      return covered && covered.length === 1 ? covered[0] : null;
+    }
+    const allowed = covered
+      ? covered.includes(dto.siteId)
+      : (await this.sites.namesFor(caller.rls, [dto.siteId])).has(dto.siteId);
+    if (!allowed) {
+      throw new BadRequestException({
+        code: SITE_NOT_ASSIGNED,
+        message:
+          'That site is not one this employee is assigned to on that day. Choose one of their sites, or change their assignment first.',
+      });
+    }
+    return dto.siteId;
   }
 
   /** The employee a correction belongs to, with no gate applied. */
@@ -317,7 +369,7 @@ export class AttendanceAdminService {
     this.assertNotFuture(query.date);
     const date = new Date(`${query.date}T00:00:00.000Z`);
 
-    const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
+    let employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.employee.findMany({
         where: {
           companyId,
@@ -352,6 +404,25 @@ export class AttendanceAdminService {
       list.push(p);
       byEmployee.set(p.employeeId, list);
     }
+    // 058: "who punched at site X" — kept to the employees with a punch there, whatever their
+    // home site. Applied after the punches are read, so the home-site filter still narrows first.
+    if (query.punchSiteId) {
+      const atSite = new Set(
+        punches
+          .filter((p) => p.siteId === query.punchSiteId)
+          .map((p) => p.employeeId),
+      );
+      employees = employees.filter((e) => atSite.has(e.id));
+      if (employees.length === 0) return [];
+    }
+    const siteNames = await this.sites.namesFor(
+      caller.rls,
+      punches.flatMap((p) => (p.siteId ? [p.siteId] : [])),
+    );
+    const siteOf = (p?: (typeof punches)[number]) => {
+      const name = p?.siteId ? siteNames.get(p.siteId) : undefined;
+      return p?.siteId && name ? { id: p.siteId, name } : null;
+    };
 
     // The same rule the employee's own history screen and payroll read, applied
     // here rather than reimplemented (FR-069).
@@ -409,6 +480,8 @@ export class AttendanceAdminService {
         inHasPhoto: hasPhoto(inPunch),
         outPunchId: outPunch?.id ?? null,
         outHasPhoto: hasPhoto(outPunch),
+        punchInSite: siteOf(inPunch),
+        punchOutSite: siteOf(outPunch),
         pendingCorrection: pendingByEmployee.get(e.id) ?? null,
       };
     });
@@ -541,7 +614,11 @@ export class AttendanceAdminService {
           companyId: employee.companyId,
           employeeId: dto.employeeId,
           date: new Date(`${dto.date}T00:00:00.000Z`),
-          payload: dto as unknown as Prisma.InputJsonValue,
+          // 058: the site as checked at submission, so the approved correction writes exactly that.
+          payload: {
+            ...dto,
+            siteId: employee.siteId ?? undefined,
+          } as unknown as Prisma.InputJsonValue,
           submittedByUserId: caller.userId,
           approvalInstanceId: instance.instanceId,
         },
@@ -635,9 +712,16 @@ export class AttendanceAdminService {
     dto: MarkAttendanceDto,
     options: { skipGates?: boolean } = {},
   ): Promise<{ employeeId: string; date: string }> {
-    const employee = options.skipGates
-      ? await this.requireEmployee(caller, dto.employeeId)
+    // 058: through the gate, the site it checked; applied from an approved correction, the site
+    // that was checked when it was submitted (stored in the payload).
+    const gated = options.skipGates
+      ? null
       : await this.validateCorrection(caller, dto);
+    const employee =
+      gated ?? (await this.requireEmployee(caller, dto.employeeId));
+    const sited: MarkAttendanceDto = gated
+      ? { ...dto, siteId: gated.siteId ?? undefined }
+      : dto;
 
     const date = new Date(`${dto.date}T00:00:00.000Z`);
 
@@ -658,8 +742,15 @@ export class AttendanceAdminService {
     );
 
     await withRlsContext(this.prisma, caller.rls, async (tx) => {
-      await this.upsertSide(tx, dto, date, PunchType.in, dto.inTime, caller);
-      await this.upsertSide(tx, dto, date, PunchType.out, dto.outTime, caller);
+      await this.upsertSide(tx, sited, date, PunchType.in, dto.inTime, caller);
+      await this.upsertSide(
+        tx,
+        sited,
+        date,
+        PunchType.out,
+        dto.outTime,
+        caller,
+      );
 
       // Append-only: the Modifications Modal renders a diff, so it needs the
       // specific before/after values, which the generic audit log's `changes`
@@ -1069,6 +1160,8 @@ export class AttendanceAdminService {
         where: { id: existing.id },
         data: {
           capturedAt,
+          // 058: a correction that names a site moves the punch there; one that does not keeps it.
+          ...(dto.siteId ? { siteId: dto.siteId } : {}),
           statusOverride: dto.statusOverride ?? existing.statusOverride,
           remarks: dto.remarks ?? existing.remarks,
           adminEdited: true,
@@ -1086,6 +1179,7 @@ export class AttendanceAdminService {
         capturedAt,
         punchDate: date,
         source: PunchSource.admin_correction,
+        siteId: dto.siteId ?? null,
         statusOverride: dto.statusOverride ?? null,
         remarks: dto.remarks ?? null,
         adminEdited: true,

@@ -142,6 +142,9 @@ function build(
     // use — a double that answered per row would let an N+1 through unnoticed.
     approvals as never,
     events as never,
+    // 058: sites for naming where a punch was made; assignments for a manual punch's site.
+    { namesFor: jest.fn().mockResolvedValue(new Map()) } as never,
+    { coveredSiteIds: jest.fn().mockResolvedValue(null) } as never,
     configService as never,
   );
 
@@ -492,6 +495,9 @@ describe('AttendanceAdminService.modifications — the actor filter (FR-012d)', 
       { resolveSlot: jest.fn() } as never,
       { submit: jest.fn() } as never,
       { emit: jest.fn(), emitAsync: jest.fn() } as never,
+      // 058: sites for naming where a punch was made; assignments for a manual punch's site.
+      { namesFor: jest.fn().mockResolvedValue(new Map()) } as never,
+      { coveredSiteIds: jest.fn().mockResolvedValue(null) } as never,
       {
         get: () => ({
           timezone: 'Asia/Kolkata',
@@ -736,6 +742,9 @@ describe('AttendanceAdminService.modifications — naming the actor', () => {
       { resolveSlot: jest.fn() } as never,
       { submit: jest.fn() } as never,
       { emit: jest.fn(), emitAsync: jest.fn() } as never,
+      // 058: sites for naming where a punch was made; assignments for a manual punch's site.
+      { namesFor: jest.fn().mockResolvedValue(new Map()) } as never,
+      { coveredSiteIds: jest.fn().mockResolvedValue(null) } as never,
       {
         get: () => ({
           timezone: 'Asia/Kolkata',

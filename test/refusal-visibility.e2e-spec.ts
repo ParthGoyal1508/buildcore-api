@@ -188,7 +188,7 @@ describe('Refusal visibility (058 US1, e2e)', () => {
     if (companyId) {
       await sys.company.deleteMany({ where: { id: companyId } });
     }
-    await app?.close();
+    await app.close();
   });
 
   const staffLog = () => `/hr/attendance/refusals`;
