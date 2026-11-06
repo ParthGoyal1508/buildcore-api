@@ -45,7 +45,12 @@ import { LabourWorkerService } from './labour-worker.service';
 @ApiTags('Labour')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
-@RequirePermissions(Permission.DAILY_WORKER_REGISTRY)
+// 058 US4: a site supervisor lists, views and registers labour and adds their photos; editing,
+// transferring and deactivating a registered labour stay with labour management (below).
+@RequirePermissions(
+  Permission.DAILY_WORKER_REGISTRY,
+  Permission.LABOUR_ATTENDANCE,
+)
 @Controller('labour/workers')
 export class LabourWorkerController {
   constructor(private readonly workers: LabourWorkerService) {}
@@ -109,6 +114,7 @@ export class LabourWorkerController {
   }
 
   @Patch(':id')
+  @RequirePermissions(Permission.DAILY_WORKER_REGISTRY)
   @ApiOperation({
     summary: "Edit a worker's registration details (052)",
     description:
@@ -127,6 +133,7 @@ export class LabourWorkerController {
   }
 
   @Post(':id/transfer')
+  @RequirePermissions(Permission.DAILY_WORKER_REGISTRY)
   @ApiOperation({
     summary: 'Move a worker to another site (052)',
     description:
@@ -143,6 +150,7 @@ export class LabourWorkerController {
   }
 
   @Patch(':id/deactivate')
+  @RequirePermissions(Permission.DAILY_WORKER_REGISTRY)
   @ApiOperation({
     summary: 'Deactivate a worker, removing them from their gang',
   })

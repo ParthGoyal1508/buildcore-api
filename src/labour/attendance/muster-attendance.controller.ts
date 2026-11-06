@@ -139,7 +139,11 @@ export class MusterAttendanceController {
   }
 
   @Post('site-photos')
-  @RequirePermissions(Permission.DAILY_WORKER_REGISTRY)
+  // 058 US4: taken on site at attendance time, so the supervisor's narrow permission too.
+  @RequirePermissions(
+    Permission.DAILY_WORKER_REGISTRY,
+    Permission.LABOUR_ATTENDANCE,
+  )
   @ApiOperation({
     summary: 'Keep a group photo of the site for reference',
     description: 'Not attendance: nobody is matched or marked from it.',

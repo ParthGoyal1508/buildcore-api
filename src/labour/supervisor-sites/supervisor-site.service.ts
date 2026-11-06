@@ -82,6 +82,29 @@ export class SupervisorSiteService {
     return allowed === null ? all : all.filter((s) => allowed.includes(s.id));
   }
 
+  /**
+   * Everyone who can mark labour attendance: holders of labour management, and (058 US4) of the
+   * site supervisor's narrow "Labour registration & attendance". One list, each person once.
+   */
+  private async attendanceMarkers(
+    companyId: string,
+  ): Promise<{ id: string; name: string }[]> {
+    const [managers, supervisors] = await Promise.all([
+      this.users.findActiveHoldersOfPermission(
+        Permission.DAILY_WORKER_REGISTRY,
+        companyId,
+      ),
+      this.users.findActiveHoldersOfPermission(
+        Permission.LABOUR_ATTENDANCE,
+        companyId,
+      ),
+    ]);
+    const byId = new Map(
+      [...managers, ...supervisors].map((holder) => [holder.id, holder]),
+    );
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   /** Everyone who can mark labour attendance, with the sites each is assigned (HR view). */
   async listAssignments(caller: AuthenticatedUser): Promise<{
     supervisors: SupervisorAssignment[];
@@ -89,10 +112,7 @@ export class SupervisorSiteService {
   }> {
     const companyId = this.requireCompany(caller);
     const [holders, rows, sites] = await Promise.all([
-      this.users.findActiveHoldersOfPermission(
-        Permission.DAILY_WORKER_REGISTRY,
-        companyId,
-      ),
+      this.attendanceMarkers(companyId),
       withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
         tx.supervisorSite.findMany({ where: { companyId } }),
       ),
@@ -120,10 +140,7 @@ export class SupervisorSiteService {
     ipAddress: string,
   ): Promise<SupervisorAssignment> {
     const companyId = this.requireCompany(caller);
-    const holders = await this.users.findActiveHoldersOfPermission(
-      Permission.DAILY_WORKER_REGISTRY,
-      companyId,
-    );
+    const holders = await this.attendanceMarkers(companyId);
     const holder = holders.find((h) => h.id === userId);
     if (!holder) {
       throw new NotFoundException(

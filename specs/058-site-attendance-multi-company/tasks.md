@@ -223,6 +223,20 @@ their role's modules.
 
 ---
 
+## Phase 5b: User Story 4 - Site supervisors only register labour and mark attendance (P1, added 2026-11-07)
+
+- [X] T049 [US4] Add `LABOUR_ATTENDANCE` to the `Permission` enum in API/prisma/schema.prisma. Migration API/prisma/migrations/20261107100000_058_labour_attendance_permission (`ALTER TYPE ... ADD VALUE`, alone in its own file) and API/prisma/migrations/20261107100100_058_labour_supervisor_role (data: the role named "Labour Supervisor" swaps DAILY_WORKER_REGISTRY for LABOUR_ATTENDANCE in `Role.permissions` and `RolePermission`, same levels; no other role)
+- [X] T050 [US4] Admit `LABOUR_ATTENDANCE` (any-of with DAILY_WORKER_REGISTRY) on: `labour/attendance` today and punch (API/src/labour/attendance/labour-punch.controller.ts), `labour/my-sites` (API/src/labour/supervisor-sites/supervisor-site.controller.ts), `labour/workers` list, contractor-options, detail, register, face-enrolment (API/src/labour/workers/labour-worker.controller.ts, with method-level DAILY_WORKER_REGISTRY on edit, transfer and deactivate), and `labour/muster-attendance/site-photos` POST (API/src/labour/attendance/muster-attendance.controller.ts)
+- [X] T051 [US4] Supervisor allocation lists holders of either permission: API/src/labour/supervisor-sites/supervisor-site.service.ts (`listAssignments`, `setAssignments`)
+- [X] T052 [P] [US4] e2e API/test/labour-supervisor-scope.e2e-spec.ts: a LABOUR_ATTENDANCE-only supervisor can list my-sites, register, list workers, see today, and upload a site photo; is refused (403) on payment sheets, advances, musters, muster attendance daily, site rates, wage rates, supervisor-sites, worker edit, transfer and deactivate; appears in the supervisor allocation list
+- [X] T053 [US4] Web: permission label "Labour registration & attendance" and "Labour management" for DAILY_WORKER_REGISTRY (WEB/app/lib/constants.ts); the Labour nav module opens with either (NAV_MODULES); WEB/app/ui/labour/labour-nav.tsx shows only Attendance and Labour without DAILY_WORKER_REGISTRY; WEB/app/dashboard/labour/layout.tsx refuses the other sections; WEB/app/labour/layout.tsx and WEB/app/ui/permissions/device-permissions.tsx accept either; the worker list hides Edit, Transfer, Deactivate and NOC without DAILY_WORKER_REGISTRY (WEB/app/dashboard/labour/workers/page.tsx)
+- [X] T054 [US4] Lint, typecheck, unit, e2e; visual check as a supervisor (tabs, worker list actions) and as an Operations Manager
+
+## Phase 5c: User Story 5 - Module-specific roles (P3, added 2026-11-07)
+
+- [ ] T055 [US5] API/prisma/seed-module-roles.ts (+ `npm run roles:modules`): idempotent creation of "<Module> — View" / "<Module> — Edit" roles per levelled permission and one role per level-agnostic permission, shared by every company; refuses the production host unless `--yes-production` is given; prints what it created and what already existed
+- [ ] T056 [US5] Run it on the local DB and check in Settings → Roles. Dev and prod only on the user's go-ahead
+
 ## Phase 6: Polish & cross-cutting
 
 - [ ] T046 [P] Update the Swagger and docs touched above, and add a short note to API/specs/058-site-attendance-multi-company/quickstart.md for any changed command

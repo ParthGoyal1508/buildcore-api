@@ -30,6 +30,14 @@
 - Q: Should the monthly attendance sheet and payroll split an employee's days by punch site? → A: No. They stay grouped by the employee's home site. The punch site shows in the daily register, the employee's attendance views and exports.
 - Q: Who may give a user a role marked "all companies", or take it away? → A: Only Super Admin. Single-company user admins can still assign every other role.
 
+### Session 2026-11-07 (added scope: US4, US5)
+
+- Q: What may a site supervisor do in labour? → A: Only register labour, mark attendance (face punch and the group photo), and see the attendance list for their sites. Everything else (muster attendance, payment sheets, musters, advances, supervisor allocation, rates, and editing, transferring or deactivating a registered labour) is the Operations Manager's.
+- Q: Can a supervisor correct a registered labour's details? → A: No. The Operations Manager does it. A supervisor may still add photos (face enrolment) for a labour registered without them.
+- Q: Who uploads the group photo? → A: The site supervisor. Viewing past group photos stays with the Operations Manager.
+- Q: What happens to existing roles that hold the labour permission? → A: Only the role named "Labour Supervisor" moves to the new narrow permission. Roles that also hold labour approvals keep full labour management.
+- Q: How many module-specific roles? → A: Two per module, View and Edit. A permission with no levels (an approval, HR letters, export) gets one role.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Only Super Admin sees attendance refusals (Priority: P1)
@@ -151,6 +159,42 @@ user administration, all-company reminders or refusals, and cannot self-approve 
 
 ---
 
+### User Story 4 - Site supervisors only register labour and mark attendance (Priority: P1)
+
+Today the one labour permission a site supervisor holds also lets them create payment sheets and
+advances, see musters and muster attendance, change wage rates, and transfer or deactivate labour.
+The client wants the supervisor limited to registering labour and marking attendance at their sites;
+the Operations Manager does the rest.
+
+**Independent Test**: a user holding only "Labour registration & attendance", assigned to site S,
+sees the Attendance and Labour tabs only. They can register a labour at S, add photos, punch them in
+and out, and upload a group photo. Payment sheets, advances, musters, muster attendance, rates,
+supervisor allocation, and edit, transfer or deactivate are all refused, by the server and the
+screens. An Operations Manager holding labour management and approvals keeps everything.
+
+**Acceptance Scenarios**:
+
+1. **Given** a supervisor with the new permission, **When** they open Labour, **Then** only
+   Attendance and Labour are offered, and the labour list shows no Edit, Transfer, Deactivate or
+   NOC.
+2. **Given** the same supervisor, **When** they call any other labour endpoint, **Then** it is
+   refused (403).
+3. **Given** an Operations Manager, **When** they allocate supervisors to sites, **Then** holders
+   of the new permission are listed alongside today's supervisors.
+4. **Given** the existing "Labour Supervisor" role, **When** the release is applied, **Then** it
+   holds the new permission instead of the old one, and roles that also hold labour approvals are
+   unchanged.
+
+### User Story 5 - Module-specific roles ready to grant (Priority: P3)
+
+For each module there is a ready-made "<Module> — View" role and a "<Module> — Edit" role, and one
+role for each single-ability permission (approvals, HR letters, export). A Super Admin can give
+someone a module's access by adding a role, without building one first.
+
+**Independent Test**: after the setup script runs, Settings → Roles lists the module roles. Each
+View role grants only read on its area, each Edit role read and write, and running the script again
+changes nothing.
+
 ### Edge Cases
 
 - An assignment naming a site that is later deactivated: punches there are no longer accepted. The
@@ -248,6 +292,30 @@ user administration, all-company reminders or refusals, and cannot self-approve 
 - **FR-024**: After this ships, the roles in the client sheet (Operations Manager, Billing Engineer,
   Plant and Machinery Incharge, Site Supervisor, HR Manager, Purchase Manager, Cashier) MUST be
   settable with their ticked modules and company access, without granting Super Admin.
+
+**Labour split (User Story 4)**
+
+- **FR-025**: There MUST be a permission "Labour registration & attendance" that allows exactly: the
+  caller's own sites list, the labour list and a labour's details, registering a labour (with its
+  contractor options), adding a labour's face photos, today's attendance list, the face punch, and
+  uploading the group photo — at the caller's assigned sites only, as today.
+- **FR-026**: Every other labour action MUST require "Labour management" (today's Daily Worker
+  Registry, renamed in the screens) or "Labour approvals", unchanged: muster attendance, payment
+  sheets, musters, advances, wage and site rates, supervisor allocation, gangs, and editing,
+  transferring or deactivating a labour.
+- **FR-027**: Supervisor allocation MUST list holders of either labour permission.
+- **FR-028**: The screens MUST offer a holder of only the new permission just the Attendance and
+  Labour tabs, and no Edit, Transfer, Deactivate or NOC on the labour list.
+- **FR-029**: The release MUST move the role named "Labour Supervisor" from Daily Worker Registry to
+  the new permission (same levels), and change no other role.
+
+**Module roles (User Story 5)**
+
+- **FR-030**: An idempotent setup script MUST create, as roles shared by every company: for each
+  levelled permission (except Cross-company access) a "<Module> — View" role (read) and a
+  "<Module> — Edit" role (read and write), and for each permission without levels a single
+  "<Ability>" role. It MUST NOT change or delete existing roles, and MUST leave a role it created
+  earlier as it is.
 
 ### Key Entities
 

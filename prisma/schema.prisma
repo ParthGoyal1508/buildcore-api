@@ -477,6 +477,11 @@ enum Permission {
   /// 043: record a delivery from the site — the "Create Inventory Purchase" page and nothing else
   /// of Inventory. Granted to Site Incharge; `INVENTORY` is what opens the purchase list.
   INVENTORY_SITE_ENTRY
+  /// 058: the site supervisor's slice of Labour — their sites, the labour list, registering a
+  /// labour (and adding its photos), today's attendance, the face punch and the group photo, at
+  /// their assigned sites. Everything else in Labour (muster attendance, payment sheets, musters,
+  /// advances, rates, editing a labour) stays `DAILY_WORKER_REGISTRY` ("Labour management").
+  LABOUR_ATTENDANCE
 
   @@schema("settings")
 }

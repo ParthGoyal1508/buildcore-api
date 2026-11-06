@@ -48,7 +48,12 @@ import { LabourPunchService } from './labour-punch.service';
 @ApiTags('Labour')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
-@RequirePermissions(Permission.DAILY_WORKER_REGISTRY)
+// 058 US4: the site supervisor's narrow permission reaches today's list and the punch; the
+// refusal routes below name their own (wider) audience.
+@RequirePermissions(
+  Permission.DAILY_WORKER_REGISTRY,
+  Permission.LABOUR_ATTENDANCE,
+)
 @Controller('labour/attendance')
 export class LabourPunchController {
   constructor(private readonly punches: LabourPunchService) {}
