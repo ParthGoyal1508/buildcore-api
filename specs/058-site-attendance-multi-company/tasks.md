@@ -234,8 +234,8 @@ their role's modules.
 
 ## Phase 5c: User Story 5 - Module-specific roles (P3, added 2026-11-07)
 
-- [ ] T055 [US5] API/prisma/seed-module-roles.ts (+ `npm run roles:modules`): idempotent creation of "<Module> — View" / "<Module> — Edit" roles per levelled permission and one role per level-agnostic permission, shared by every company; refuses the production host unless `--yes-production` is given; prints what it created and what already existed
-- [ ] T056 [US5] Run it on the local DB and check in Settings → Roles. Dev and prod only on the user's go-ahead
+- [X] T055 [US5] API/prisma/seed-module-roles.ts (+ `npm run roles:modules`): idempotent creation of "<Module> — View" / "<Module> — Edit" roles per levelled permission and one role per level-agnostic permission, shared by every company; refuses the production host unless `--yes-production` is given; prints what it created and what already existed
+- [X] T056 [US5] Run it on the local DB and check in Settings → Roles (done 2026-11-07: 66 roles created, a second run created none). Dev and prod only on the user's go-ahead (not yet)
 
 ## Phase 6: Polish & cross-cutting
 
