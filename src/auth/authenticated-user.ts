@@ -60,6 +60,25 @@ export interface AuthenticatedUser extends User {
   /** The signed-in session (refresh-token family) the request's access token belongs to,
    * from its `sid` claim (029 FR-006). Absent for a token issued before 029. */
   sessionId?: string | null;
+  /**
+   * The account's own company (`User.companyId`), whatever company the request works in (058).
+   *
+   * For everyone but an all-companies user this equals `companyId`. For an all-companies user
+   * `companyId` is the **working** company — the one they selected — and this is where their own
+   * records live: their employee row, their login, their payslips. My Workspace and the account's
+   * own screens read from here (`@OwnRecords()`, `change-password.service.ts`).
+   */
+  homeCompanyId: string | null;
+  /**
+   * Holds a role marked "works in all companies" (058) **and not** `CROSS_COMPANY_ACCESS`.
+   *
+   * Such a user switches between companies but is always scoped to exactly one: `companyId` is
+   * swapped to the selected company by `JwtStrategy`, so every existing reader of `companyId` and
+   * every `rlsContextFor` follows the selection — through the ordinary, non-bypass branch. None
+   * of Super Admin's group powers come with it; each is keyed to the permission, which this user
+   * does not hold. A Super Admin holding such a role as well is just a Super Admin (false here).
+   */
+  multiCompany: boolean;
 }
 
 /** One area the caller holds, at one level. */
@@ -96,8 +115,13 @@ export function toAuthenticatedUser(user: UserWithRoles): AuthenticatedUser {
     }
   }
   const { userRoles: _userRoles, ...rest } = user;
+  const multiCompany =
+    user.userRoles.some((userRole) => userRole.role.allCompanies) &&
+    !permissionSet.has(Permission.CROSS_COMPANY_ACCESS);
   return {
     ...rest,
+    homeCompanyId: user.companyId,
+    multiCompany,
     permissions: [...permissionSet],
     grants: [...grantKeys].map((key) => {
       const [permission, level] = key.split(':');

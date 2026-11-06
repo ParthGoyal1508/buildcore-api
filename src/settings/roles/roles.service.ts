@@ -20,6 +20,7 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { UsersService } from '../../users/users.service';
 import { assertMayGrant, expandRoleGrants, mayGrantAll } from './grant-ceiling';
+import { ALL_COMPANIES_SUPER_ADMIN_ONLY } from './roles.constants';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 
@@ -123,14 +124,18 @@ export class RolesService {
     });
     const offered =
       options.grantable && caller
-        ? roles.filter((role) =>
-            mayGrantAll(
-              caller,
-              expandRoleGrants(
-                role.permissions ?? [],
-                role.rolePermissions ?? [],
-              ),
-            ),
+        ? roles.filter(
+            (role) =>
+              mayGrantAll(
+                caller,
+                expandRoleGrants(
+                  role.permissions ?? [],
+                  role.rolePermissions ?? [],
+                ),
+              ) &&
+              // 058: a role that works in all companies is only a Super Admin's to give.
+              (!role.allCompanies ||
+                caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)),
           )
         : roles;
     return Promise.all(
@@ -284,6 +289,7 @@ export class RolesService {
     const grantRows = this.grantRowsFor(dto);
     // 2026-10-16 audit, C3: a role grants no more than its author holds.
     assertMayGrant(caller, grantRows, 'create that role');
+    if (dto.allCompanies) this.assertMaySetAllCompanies(caller);
 
     // Custom roles are never protected — only the seeded Super Admin row is.
     const created = await this.prisma.role
@@ -294,6 +300,7 @@ export class RolesService {
           permissions: dto.permissions,
           isProtected: false,
           homeModule: dto.homeModule ?? null,
+          allCompanies: dto.allCompanies ?? false,
           // Both shapes written together, in one statement. `Role.permissions` is on its way
           // out (019 Phase 1) but is still what the rest of the codebase reads, so the two must
           // never be written apart — a role whose array and rows disagreed would grant one thing
@@ -366,6 +373,12 @@ export class RolesService {
       : null;
     if (grantRows)
       assertMayGrant(caller, grantRows, 'give that role these permissions');
+    if (
+      dto.allCompanies !== undefined &&
+      dto.allCompanies !== existing.allCompanies
+    ) {
+      this.assertMaySetAllCompanies(caller);
+    }
 
     const updated = await this.prisma.role
       .update({
@@ -375,6 +388,9 @@ export class RolesService {
           ...(dto.permissions ? { permissions: dto.permissions } : {}),
           ...(dto.homeModule !== undefined
             ? { homeModule: dto.homeModule }
+            : {}),
+          ...(dto.allCompanies !== undefined
+            ? { allCompanies: dto.allCompanies }
             : {}),
           ...(grantRows
             ? { rolePermissions: { deleteMany: {}, create: grantRows } }
@@ -548,6 +564,19 @@ export class RolesService {
         message: `This role is also held by accounts outside your company, so only a group administrator can ${verb} it. Create a role of your own instead.`,
       });
     }
+  }
+
+  /**
+   * 058: opening a second company to a role's holders is the directors' call. Only a Super Admin
+   * (`CROSS_COMPANY_ACCESS`) may mark a role "works in all companies", or unmark it.
+   */
+  private assertMaySetAllCompanies(caller: AuthenticatedUser): void {
+    if (caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)) return;
+    throw new ForbiddenException({
+      code: ALL_COMPANIES_SUPER_ADMIN_ONLY,
+      message:
+        'Only a Super Admin can set whether a role works in all companies.',
+    });
   }
 
   private assertNotProtected(role: Role, verb: string): void {

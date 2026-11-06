@@ -43,6 +43,8 @@ function build(users: Record<string, jest.Mock> = {}) {
     }),
     // The viewer role these fixtures assign grants nothing beyond what every caller holds.
     grantsOfRole: jest.fn().mockResolvedValue([]),
+    // 058: no role in the default fixture works in all companies.
+    allCompaniesRoleIds: jest.fn().mockResolvedValue([]),
     // 036 C1: the account's current roles, diffed against the requested set. None by default,
     // so a `roleId` adds and removes nothing.
     roleIdsOf: jest.fn().mockResolvedValue([]),
@@ -252,6 +254,50 @@ describe('UsersAdminService', () => {
       );
       expect(usersService.accountStatus).not.toHaveBeenCalled();
       expect(deactivation.afterDeactivation).not.toHaveBeenCalled();
+    });
+  });
+
+  // 058 FR-017a: a role that works in all companies opens a second company.
+  describe('all-companies roles', () => {
+    const allCompanies = () =>
+      jest.fn(async (ids: string[]) => ids.filter((id) => id === 'role-all'));
+
+    it('refuses a company administrator giving one', async () => {
+      const { service, usersService } = build({
+        allCompaniesRoleIds: allCompanies(),
+      });
+      await expect(
+        service.update(hoUser, 'user-2', { roleId: 'role-all' }, '127.0.0.1'),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'ALL_COMPANIES_SUPER_ADMIN_ONLY',
+        }),
+      });
+      expect(usersService.updateRoleOrStatus).not.toHaveBeenCalled();
+    });
+
+    it('refuses a company administrator taking one away', async () => {
+      const { service, usersService } = build({
+        roleIdsOf: jest.fn().mockResolvedValue(['role-all', 'role-x']),
+        allCompaniesRoleIds: allCompanies(),
+      });
+      await expect(
+        service.update(hoUser, 'user-2', { roleIds: ['role-x'] }, '127.0.0.1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(usersService.updateRoleOrStatus).not.toHaveBeenCalled();
+    });
+
+    it('lets a Super Admin give one', async () => {
+      const { service, usersService } = build({
+        allCompaniesRoleIds: allCompanies(),
+      });
+      await service.update(
+        superAdmin,
+        'user-2',
+        { roleId: 'role-all' },
+        '127.0.0.1',
+      );
+      expect(usersService.updateRoleOrStatus).toHaveBeenCalled();
     });
   });
 

@@ -26,7 +26,11 @@ import { TokenDto } from './dto/token.dto';
 import { JwtDto } from './dto/jwt.dto';
 import { ConfigService } from '@nestjs/config';
 import { SecurityConfig } from '../common/configs/config.interface';
-import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
+import {
+  ownRecordsContextFor,
+  rlsContextFor,
+  withRlsContext,
+} from '../common/prisma/rls-context';
 import { AuthenticatedUser, toAuthenticatedUser } from './authenticated-user';
 import { SESSION_EXPIRED, SESSION_REVOKED } from './session-error-codes';
 import {
@@ -219,7 +223,9 @@ export class AuthService {
       ? new Date(Date.now() + durationMinutes * 60 * 1000)
       : null;
 
-    await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
+    // 058: the account's own row, in its home company — `rlsContextFor` of a request user who
+    // works in all companies would be scoped to the company they selected, and miss it.
+    await withRlsContext(this.prisma, ownRecordsContextFor(user), (tx) =>
       tx.user.update({
         where: { id: user.id },
         data: { consecutiveFailures, lockedUntil },

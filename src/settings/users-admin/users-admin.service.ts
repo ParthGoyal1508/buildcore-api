@@ -11,6 +11,7 @@ import {
 } from '@prisma/client';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { assertMayGrant } from '../roles/grant-ceiling';
+import { ALL_COMPANIES_SUPER_ADMIN_ONLY } from '../roles/roles.constants';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { effectiveCompanyId } from '../company-scope';
@@ -120,6 +121,19 @@ export class UsersAdminService {
           throw new ConflictException(`Role ${roleId} does not exist`);
         }
         assertMayGrant(caller, grants, 'assign that role');
+      }
+      // 058 FR-017a: giving somebody a role that works in all companies — or taking it away —
+      // opens or closes a second company to them. That is the directors' call.
+      if (
+        !caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS) &&
+        (await this.usersService.allCompaniesRoleIds([...added, ...removed]))
+          .length > 0
+      ) {
+        throw new ForbiddenException({
+          code: ALL_COMPANIES_SUPER_ADMIN_ONLY,
+          message:
+            'Only a Super Admin can give or remove a role that works in all companies.',
+        });
       }
     }
 

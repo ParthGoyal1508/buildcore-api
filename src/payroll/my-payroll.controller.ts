@@ -22,6 +22,7 @@ import { SalaryAdvancesService } from './advances/salary-advances.service';
 import { LoansService } from './loans/loans.service';
 import { DeclareTaxDto, FinancialYearQueryDto } from './tds/dto/tds.dto';
 import { TdsService } from './tds/tds.service';
+import { OwnRecords } from '../common/own-records/own-records.decorator';
 
 /**
  * An employee's own loans, salary advances and tax declaration (2026-10-16, My Workspace).
@@ -34,6 +35,8 @@ import { TdsService } from './tds/tds.service';
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @SelfService()
+// 058: the caller's own records, read in their home company.
+@OwnRecords()
 @Controller('my')
 export class MyPayrollController {
   constructor(

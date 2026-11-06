@@ -162,18 +162,18 @@ their role's modules.
 
 ### Tests first
 
-- [ ] T030 [P] [US3] Unit tests in API/src/auth/jwt.strategy.spec.ts:
+- [X] T030 [P] [US3] Unit tests in API/src/auth/jwt.strategy.spec.ts:
   - a multiCompany user's `companyId` becomes the selection (and is the home company when there is none or it is inactive), with `homeCompanyId` kept and `selectedCompanyId` null
   - a Super Admin is unchanged
   - a single-company user is unchanged
-- [ ] T031 [P] [US3] Unit test API/src/common/own-records/own-records.coverage.spec.ts: enumerate every controller whose `@Controller` path starts with `my` (read the `path` metadata from the module classes, or glob `src/**/*.controller.ts`) and assert `@OwnRecords()` is on it, except the allow-list `my/cash-policy` and `my/company-selection`
+- [X] T031 [P] [US3] Unit test API/src/common/own-records/own-records.coverage.spec.ts: enumerate every controller whose `@Controller` path starts with `my` (read the `path` metadata from the module classes, or glob `src/**/*.controller.ts`) and assert `@OwnRecords()` is on it, except the allow-list `my/cash-policy` and `my/company-selection`
 
 ### Implementation (API)
 
-- [ ] T032 [US3] In API/src/auth/authenticated-user.ts, add `homeCompanyId: string | null` and `multiCompany: boolean`. Compute `multiCompany` in `loadUserWithPermissions` (API/src/auth/auth.service.ts): any held role has `allCompanies` and the permissions lack `CROSS_COMPANY_ACCESS`. Include `allCompanies` in the role select
-- [ ] T033 [US3] In API/src/settings/company-selection/company-selection.service.ts, `selectableFor`, `select` and `resolve` treat `multiCompany` like cross-company for listing and storing: active companies only, and an inactive or unknown stored selection resolves to null
-- [ ] T034 [US3] In API/src/auth/jwt.strategy.ts, for `multiCompany` users set `homeCompanyId = companyId` and `companyId = (await resolve) ?? homeCompanyId`, and leave `selectedCompanyId = null`. Super Admin and other users keep today's path, with `homeCompanyId = companyId`. If the home company is inactive and there is no valid selection, use the first active company by name (spec edge case), and add that case to T030. Make T030 pass
-- [ ] T035 [US3] Create API/src/common/own-records/own-records.decorator.ts (class decorator setting metadata) and API/src/common/own-records/own-records.interceptor.ts. The interceptor is registered globally in API/src/app.module.ts and acts only when the metadata is present and `user.multiCompany`, setting `user.companyId = user.homeCompanyId`. Apply `@OwnRecords()` to:
+- [X] T032 [US3] In API/src/auth/authenticated-user.ts, add `homeCompanyId: string | null` and `multiCompany: boolean`. Compute `multiCompany` in `loadUserWithPermissions` (API/src/auth/auth.service.ts): any held role has `allCompanies` and the permissions lack `CROSS_COMPANY_ACCESS`. Include `allCompanies` in the role select
+- [X] T033 [US3] In API/src/settings/company-selection/company-selection.service.ts, `selectableFor`, `select` and `resolve` treat `multiCompany` like cross-company for listing and storing: active companies only, and an inactive or unknown stored selection resolves to null
+- [X] T034 [US3] In API/src/auth/jwt.strategy.ts, for `multiCompany` users set `homeCompanyId = companyId` and `companyId = (await resolve) ?? homeCompanyId`, and leave `selectedCompanyId = null`. Super Admin and other users keep today's path, with `homeCompanyId = companyId`. If the home company is inactive and there is no valid selection, use the first active company by name (spec edge case), and add that case to T030. Make T030 pass
+- [X] T035 [US3] Create API/src/common/own-records/own-records.decorator.ts (class decorator setting metadata) and API/src/common/own-records/own-records.interceptor.ts. The interceptor is registered globally in API/src/app.module.ts and acts only when the metadata is present and `user.multiCompany`, setting `user.companyId = user.homeCompanyId`. Apply `@OwnRecords()` to:
   - src/hr/punch/punch.controller.ts
   - src/hr/leave/leave.controller.ts (the `my/leave` controller)
   - src/hr/reimbursements/reimbursement.controller.ts (`my/reimbursements`)
@@ -185,14 +185,14 @@ their role's modules.
   - src/recruitment/resignations/my-resignation.controller.ts
 
   Make T031 pass.
-- [ ] T036 [US3] Own-account services use the home company: replace `caller.companyId` with `caller.homeCompanyId ?? caller.companyId` in API/src/users/change-password.service.ts and API/src/users/users.service.ts (own-row reads). In API/src/users/user-summary.ts, return home `companyId` plus `workingCompanyId` and `multiCompany`. Audit `grep -n "companyId" src/auth src/users src/account-creation` for other own-row reads and record the result in the PR description
-- [ ] T037 [US3] Roles in API/src/settings/roles/roles.service.ts and its DTOs under API/src/settings/roles/dto/:
+- [X] T036 [US3] Own-account services use the home company: replace `caller.companyId` with `caller.homeCompanyId ?? caller.companyId` in API/src/users/change-password.service.ts and API/src/users/users.service.ts (own-row reads). In API/src/users/user-summary.ts, return home `companyId` plus `workingCompanyId` and `multiCompany`. Audit `grep -n "companyId" src/auth src/users src/account-creation` for other own-row reads and record the result in the PR description
+- [X] T037 [US3] Roles in API/src/settings/roles/roles.service.ts and its DTOs under API/src/settings/roles/dto/:
   - accept `allCompanies?: boolean` on create and update
   - setting or changing it without `CROSS_COMPANY_ACCESS` → 403 `ALL_COMPANIES_SUPER_ADMIN_ONLY`
   - include `allCompanies` in list and detail responses
   - audit the change through the existing role audit entry
-- [ ] T038 [US3] Assigning or removing a role with `allCompanies` without `CROSS_COMPANY_ACCESS` → 403 `ALL_COMPANIES_SUPER_ADMIN_ONLY`. Applies in API/src/users/users.service.ts (role updates) and API/src/account-creation/users/users.service.ts (+ dto/create-user.dto.ts). Put it next to the existing `assertMayGrant` calls. Confirm that the existing user-role change audit entry records the role. If it doesn't, add an audit entry (FR-017a)
-- [ ] T039 [P] [US3] e2e API/test/multi-company-access.e2e-spec.ts:
+- [X] T038 [US3] Assigning or removing a role with `allCompanies` without `CROSS_COMPANY_ACCESS` → 403 `ALL_COMPANIES_SUPER_ADMIN_ONLY`. Applies in API/src/users/users.service.ts (role updates) and API/src/account-creation/users/users.service.ts (+ dto/create-user.dto.ts). Put it next to the existing `assertMayGrant` calls. Confirm that the existing user-role change audit entry records the role. If it doesn't, add an audit entry (FR-017a)
+- [X] T039 [P] [US3] e2e API/test/multi-company-access.e2e-spec.ts:
   - Super Admin flags a role and assigns it to a PRPL user
   - the user lists both companies, selects TE, and their list and create land in TE
   - group dashboard, App Settings / cash-visibility, `PATCH /settings/companies/<PRPL id>` while TE is selected, `reminders?scope=all` and the refusal routes → 403
@@ -200,17 +200,17 @@ their role's modules.
   - `GET /my/punch/open` and `GET /my/salary/...` resolve the PRPL employee while TE is selected
   - a non-Super-Admin user admin assigning the role → 403
   - unflagging → the next request works in PRPL only
-- [ ] T040 [P] [US3] Super Admin regression e2e: extend API/test/company-selection-rls.e2e-spec.ts to assert Super Admin selection and bypass behaviour is byte-for-byte unchanged
+- [X] T040 [P] [US3] Super Admin regression e2e: extend API/test/company-selection-rls.e2e-spec.ts to assert Super Admin selection and bypass behaviour is byte-for-byte unchanged
 
 ### Implementation (WEB)
 
-- [ ] T041 [US3] Add `allCompanies` to the role types and calls in WEB/app/lib/api/settings.ts, and `workingCompanyId`/`multiCompany` to the user summary type in WEB/app/lib/api/users.ts
-- [ ] T042 [US3] WEB/app/ui/settings/role-modal.tsx and WEB/app/ui/settings/role-list.tsx:
+- [X] T041 [US3] Add `allCompanies` to the role types and calls in WEB/app/lib/api/settings.ts, and `workingCompanyId`/`multiCompany` to the user summary type in WEB/app/lib/api/users.ts
+- [X] T042 [US3] WEB/app/ui/settings/role-modal.tsx and WEB/app/ui/settings/role-list.tsx:
   - a "Works in all companies" checkbox, shown and editable only with `CROSS_COMPANY_ACCESS`, with a one-line hint that it does not give Super Admin powers
   - an "All companies" badge in the list
-- [ ] T043 [US3] WEB/app/ui/settings/user-list.tsx and WEB/app/ui/account-creation/create-user-form.tsx: disable roles carrying `allCompanies` for non-Super-Admin admins, with a tooltip, and handle the 403 message
-- [ ] T044 [US3] Verify the company switcher (WEB/app/ui/company-switcher.tsx) appears for a multi-company user and that switching refreshes data. Check WEB code that reads the user summary's `companyId` as "current company" (`grep -rn "companyId" app/lib app/ui | grep -i "user\|me"`) and switch those reads to `workingCompanyId` where they mean the working company
-- [ ] T045 [US3] Run lint and typecheck in both repos and `npm test` plus `npm run test:e2e` in API/. Visual check as a multi-company user:
+- [X] T043 [US3] WEB/app/ui/settings/user-list.tsx and WEB/app/ui/account-creation/create-user-form.tsx: disable roles carrying `allCompanies` for non-Super-Admin admins, with a tooltip, and handle the 403 message
+- [X] T044 [US3] Verify the company switcher (WEB/app/ui/company-switcher.tsx) appears for a multi-company user and that switching refreshes data. Check WEB code that reads the user summary's `companyId` as "current company" (`grep -rn "companyId" app/lib app/ui | grep -i "user\|me"`) and switch those reads to `workingCompanyId` where they mean the working company
+- [X] T045 [US3] Run lint and typecheck in both repos and `npm test` plus `npm run test:e2e` in API/. Visual check as a multi-company user:
   - the switcher is open
   - Inventory in TE
   - group dashboard and App Settings links absent

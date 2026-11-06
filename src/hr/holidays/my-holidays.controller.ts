@@ -17,6 +17,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { callerFrom } from '../caller-context';
 import { EmployeesService } from '../employees/employees.service';
 import { HolidaysService } from './holidays.service';
+import { OwnRecords } from '../../common/own-records/own-records.decorator';
 
 /**
  * The holiday list as an employee reads it (2026-10-15). The client: "as a user I don't have any
@@ -32,6 +33,8 @@ import { HolidaysService } from './holidays.service';
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @SelfService()
+// 058: the caller's own records, read in their home company.
+@OwnRecords()
 @Controller('my/holidays')
 export class MyHolidaysController {
   constructor(
@@ -77,6 +80,8 @@ export class MyHolidaysController {
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @SelfService()
+// 058: the caller's own records, read in their home company.
+@OwnRecords()
 @Controller('my/employee')
 export class MyEmployeeController {
   constructor(private readonly employees: EmployeesService) {}

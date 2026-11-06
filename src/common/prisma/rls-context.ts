@@ -37,6 +37,31 @@ export function rlsContextFor(caller: {
 }
 
 /**
+ * The RLS context for reading and writing the caller's **own** records — their login row, their
+ * employee record, their payslips (058).
+ *
+ * The same as `rlsContextFor` for everyone except an all-companies user, whose `companyId` is the
+ * company they are working in. Their own records stay in their home company whichever company
+ * they have selected, so these reads are scoped there instead — never wider: one company, the
+ * caller's own.
+ */
+export function ownRecordsContextFor(caller: {
+  companyId: string | null;
+  permissions: Permission[];
+  selectedCompanyId?: string | null;
+  homeCompanyId?: string | null;
+  multiCompany?: boolean;
+}): RlsContext {
+  if (caller.multiCompany) {
+    return {
+      isSuperAdmin: false,
+      companyId: caller.homeCompanyId ?? caller.companyId,
+    };
+  }
+  return rlsContextFor(caller);
+}
+
+/**
  * Runs `fn` inside a transaction with the Postgres session-local values that every
  * tenant-scoped table's `tenant_isolation` RLS policy checks (migrations
  * `20260828162304_multi_schema_and_auth_extensions` and

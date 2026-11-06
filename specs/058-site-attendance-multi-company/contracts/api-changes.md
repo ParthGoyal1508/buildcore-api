@@ -90,6 +90,8 @@ the refusal detail carries that site's name.
   `selected`. For other users who aren't Super Admin it is unchanged (only their own company).
 - **`PUT /my/company-selection`**: the same body. It is now accepted for all-companies users, and
   403 `COMPANY_NOT_ACCESSIBLE` is returned otherwise, as today.
-- **`GET /me`** (user summary): `companyId` stays the home company. New fields:
-  - `workingCompanyId`: the company being worked in.
-  - `multiCompany: boolean`
+- **The signed-in user** (`GET /users/me` and every request's user): `companyId` is the company
+  the request works in. For an all-companies user that is their selection, else their home
+  company. New fields: `homeCompanyId` (the account's own company) and `multiCompany: boolean`.
+  This was changed during implementation: the plan had `companyId` stay the home company, with a
+  separate `workingCompanyId`.
