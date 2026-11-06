@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiForbiddenResponse,
   ApiOperation,
   ApiResponse,
   ApiTags,
@@ -37,6 +38,11 @@ import { RefusalsQueryDto } from './dto/refusals-query.dto';
 import { PunchRefusalsService } from '../punch/punch-refusals.service';
 import { PunchService } from '../punch/punch.service';
 import { resolveCompanyId } from '../../settings/company-scope';
+import {
+  GroupAccessGuard,
+  GroupAccessRefusalMessage,
+  REFUSED_PUNCH_LOG_REFUSAL,
+} from '../../dashboard/group-access.guard';
 
 /** Admin attendance administration (005 US3). */
 @ApiTags('HR — Attendance')
@@ -217,6 +223,12 @@ export class AttendanceAdminController {
 
   @Get('refusals')
   @RequireLevel(AccessLevel.write)
+  // 058 FR-001: Super Admin only, on top of write on attendance.
+  @UseGuards(GroupAccessGuard)
+  @GroupAccessRefusalMessage(REFUSED_PUNCH_LOG_REFUSAL)
+  @ApiForbiddenResponse({
+    description: 'The caller is not a Super Admin (`SUPER_ADMIN_REQUIRED`).',
+  })
   @ApiOperation({
     summary: 'Punches that were refused, or would have been (020 FR-013c)',
     description:
@@ -226,7 +238,9 @@ export class AttendanceAdminController {
       'manual attendance correction, which goes through its own review.\n\n' +
       'Needs **write** on attendance, not read. Whoever can read a daily attendance sheet can see ' +
       'everybody in their company; this surface carries where a named person physically was and ' +
-      'how well their face matched, which is a narrower audience than "can read attendance".\n\n' +
+      'how well their face matched, which is a narrower audience than "can read attendance". ' +
+      'Since 058 it is narrower still: **Super Admin only** (the client\u2019s decision, 2026-11-06). ' +
+      'An employee still sees their own refused attempts at `GET /my/punch/refusals`.\n\n' +
       'The same shape whether or not the hard block is switched on. While it is off these are ' +
       'punches that were accepted and would have been refused, which is what makes the before and ' +
       'after directly comparable.',
@@ -251,10 +265,15 @@ export class AttendanceAdminController {
 
   @Get('refusals/:id/photo')
   @RequireLevel(AccessLevel.write)
+  @UseGuards(GroupAccessGuard)
+  @GroupAccessRefusalMessage(REFUSED_PUNCH_LOG_REFUSAL)
+  @ApiForbiddenResponse({
+    description: 'The caller is not a Super Admin (`SUPER_ADMIN_REQUIRED`).',
+  })
   @ApiOperation({
     summary: 'The photo of one refused punch attempt (JPEG, 057)',
     description:
-      'Same audience as the refusal log — **write** on attendance. Kept for the refusal retention ' +
+      'Same audience as the refusal log — Super Admin only (058). Kept for the refusal retention ' +
       'period (30 days by default) and 404 after the sweep deletes it; the log row stays.',
   })
   async refusalPhoto(

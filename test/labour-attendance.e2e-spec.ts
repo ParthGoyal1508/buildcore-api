@@ -101,6 +101,7 @@ describe('Labour face attendance (031, e2e)', () => {
   let siteB: string;
   let hr: { userId: string; token: string };
   let supervisor: { userId: string; token: string };
+  let superAdmin: { userId: string; token: string };
   const madeUserIds: string[] = [];
   const madeRoleIds: string[] = [];
 
@@ -206,6 +207,10 @@ describe('Labour face attendance (031, e2e)', () => {
       Permission.LABOUR_PUNCH_CORRECT,
     ]);
     supervisor = await makeUser('supervisor', [
+      Permission.DAILY_WORKER_REGISTRY,
+    ]);
+    superAdmin = await makeUser('superAdmin', [
+      Permission.CROSS_COMPANY_ACCESS,
       Permission.DAILY_WORKER_REGISTRY,
     ]);
   });
@@ -374,9 +379,11 @@ describe('Labour face attendance (031, e2e)', () => {
       expect(await sys.labourPunch.count({ where: { workerId: male } })).toBe(
         0,
       );
+      // 058: the refusal log is Super Admin only. The supervisor saw the 422 above; the list is
+      // checked through the Super Admin, and the supervisor's 403 in refusal-visibility.e2e-spec.
       const refusals = await http()
         .get(`/labour/attendance/refusals?siteId=${siteA}`)
-        .set(auth(supervisor.token))
+        .set(auth(superAdmin.token))
         .expect(200);
       expect(refusals.body[0]).toMatchObject({
         workerId: male,

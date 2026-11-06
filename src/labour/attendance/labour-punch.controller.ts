@@ -14,6 +14,7 @@ import {
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiForbiddenResponse,
   ApiConsumes,
   ApiOperation,
   ApiTags,
@@ -26,6 +27,11 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import {
+  GroupAccessGuard,
+  GroupAccessRefusalMessage,
+  REFUSED_PUNCH_LOG_REFUSAL,
+} from '../../dashboard/group-access.guard';
 import {
   framesFrom,
   LivenessFramesInterceptor,
@@ -64,7 +70,17 @@ export class LabourPunchController {
     Permission.DAILY_WORKER_REGISTRY,
     Permission.LABOUR_APPROVE,
   )
-  @ApiOperation({ summary: 'Refused labour punches at a site, newest first' })
+  // 058 FR-002: and only a Super Admin. The supervisor still sees why a punch was refused at the
+  // moment it happens (the 422 from `POST punch`); the log of them is not theirs to browse.
+  @UseGuards(GroupAccessGuard)
+  @GroupAccessRefusalMessage(REFUSED_PUNCH_LOG_REFUSAL)
+  @ApiForbiddenResponse({
+    description: 'The caller is not a Super Admin (`SUPER_ADMIN_REQUIRED`).',
+  })
+  @ApiOperation({
+    summary:
+      'Refused labour punches at a site, newest first (Super Admin only, 058)',
+  })
   async refusals(
     @UserEntity() caller: AuthenticatedUser,
     @Query() query: LabourRefusalsQueryDto,
@@ -77,10 +93,15 @@ export class LabourPunchController {
     Permission.DAILY_WORKER_REGISTRY,
     Permission.LABOUR_APPROVE,
   )
+  @UseGuards(GroupAccessGuard)
+  @GroupAccessRefusalMessage(REFUSED_PUNCH_LOG_REFUSAL)
+  @ApiForbiddenResponse({
+    description: 'The caller is not a Super Admin (`SUPER_ADMIN_REQUIRED`).',
+  })
   @ApiOperation({
     summary: 'The photo of one refused labour punch (JPEG, 057)',
     description:
-      'At a site the caller may see. Kept for the refusal retention period (30 days by default); ' +
+      'Super Admin only (058), at a site the caller may see. Kept for the refusal retention period (30 days by default); ' +
       '404 after the sweep deletes it.',
   })
   async refusalPhoto(
