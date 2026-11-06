@@ -239,9 +239,9 @@ their role's modules.
 
 ## Phase 6: Polish & cross-cutting
 
-- [ ] T046 [P] Update the Swagger and docs touched above, and add a short note to API/specs/058-site-attendance-multi-company/quickstart.md for any changed command
-- [ ] T047 Run the full quickstart.md manual scenarios end to end in both worktrees, and check with `git status` that only intended files changed in API/ and WEB/
-- [ ] T048 Write the PR descriptions (API and WEB, base `develop`): the summary per story, the migration and backfill note (prod needs `migrate deploy`, which runs automatically on Render start), the `caller.companyId` audit result from T036, and the client role-setup step after release. Don't merge or push without the user's go-ahead
+- [X] T046 [P] Update the Swagger and docs touched above, and add a short note to API/specs/058-site-attendance-multi-company/quickstart.md for any changed command
+- [X] T047 Run the full quickstart.md manual scenarios end to end in both worktrees, and check with `git status` that only intended files changed in API/ and WEB/
+- [X] T048 Write the PR descriptions (API and WEB, base `develop`): the summary per story, the migration and backfill note (prod needs `migrate deploy`, which runs automatically on Render start), the `caller.companyId` audit result from T036, and the client role-setup step after release. Don't merge or push without the user's go-ahead
 
 ---
 

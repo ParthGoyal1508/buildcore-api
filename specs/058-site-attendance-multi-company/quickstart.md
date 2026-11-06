@@ -58,3 +58,15 @@ The new specs cover:
    - My Workspace punch and salary slips still show the user's own PRPL record while TE is selected.
    - As a PRPL user admin who isn't Super Admin: assigning that role returns 403.
    - Unmark the role: the user's next request works in PRPL only, and the switcher disappears.
+
+## Added 2026-11-07
+
+4. **Labour split (US4)**: as a user holding only "Labour Registration & Attendance" and assigned
+   to a site, Labour shows Attendance and Labour only. Registering a labour, adding photos,
+   punching and the group photo all work. Payment sheets, advances, musters, muster attendance,
+   rates and supervisors show an access message (the API answers 403), and the labour list has no
+   Edit, Transfer, Deactivate or NOC. An Operations Manager holding Labour Management and Labour
+   Approvals sees everything. e2e: `test/labour-supervisor-scope.e2e-spec.ts`.
+5. **Module roles (US5)**: `npm run roles:modules` on the local DB creates the "<Module> — View" /
+   "<Module> — Edit" roles and the single-ability roles. Running it again creates none. A remote
+   database needs `-- --host <host>`.
