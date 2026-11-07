@@ -30,6 +30,7 @@ import {
 import { ProjectDocumentsService } from './project-documents.service';
 import { ProjectLockGuard } from '../guards/project-lock.guard';
 import { listPaging } from '../list-paging';
+import { EditorMayDelete } from '../../common/record-delete/editor-may-delete.decorator';
 
 /**
  * Filing documents against a project, and staging them before one exists (017 FR-008a, FR-009b).
@@ -125,6 +126,7 @@ export class ProjectDocumentUploadController {
     );
   }
 
+  @EditorMayDelete()
   @Delete('projects/:projectId/documents/:documentId')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({

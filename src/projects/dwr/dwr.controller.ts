@@ -41,6 +41,7 @@ import { DwrPeriodDto, ListDwrDto } from './dto/dwr-query.dto';
 import { UpdateDwrDto } from './dto/update-dwr.dto';
 import { contentDispositionFor } from '../../common/storage/file-type';
 import { decodeBase64Upload } from '../../common/uploads';
+import { EditorMayDelete } from '../../common/record-delete/editor-may-delete.decorator';
 
 /**
  * Daily work reports (022 — 008 User Story 5, built two months late).
@@ -158,6 +159,7 @@ export class DwrController {
     );
   }
 
+  @EditorMayDelete()
   @Delete('projects/dwr/:dwrId/attachments/:attachmentId')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({

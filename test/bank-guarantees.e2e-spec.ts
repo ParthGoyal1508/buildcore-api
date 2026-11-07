@@ -56,6 +56,7 @@ describe('Bank guarantees (037, e2e)', () => {
 
   let companyId: string;
   let writerToken: string;
+  let superToken: string;
   let readerToken: string;
   let outsiderToken: string;
   const userIds: string[] = [];
@@ -131,6 +132,11 @@ describe('Bank guarantees (037, e2e)', () => {
     readerToken = await makeUser('Reader', [
       [Permission.BANK_GUARANTEES, [AccessLevel.read]],
       [Permission.DASHBOARD, both],
+    ]);
+    superToken = await makeUser('Super', [
+      [Permission.BANK_GUARANTEES, both],
+      [Permission.DASHBOARD, both],
+      [Permission.CROSS_COMPANY_ACCESS, both],
     ]);
     outsiderToken = await makeUser('Outsider', [
       [Permission.PROJECTS, both],
@@ -430,22 +436,34 @@ describe('Bank guarantees (037, e2e)', () => {
     await http().get(`${base}/${tenderId}`).set(auth(readerToken)).expect(200);
   });
 
+  it('leaves deleting a tender or a guarantee to a Super Admin (2026-11-07)', async () => {
+    const res = await http()
+      .delete(`${base}/guarantees/${pbgId}`)
+      .set(auth(writerToken))
+      .expect(403);
+    expect(res.body.code).toBe('DELETE_SUPER_ADMIN_ONLY');
+    await http()
+      .delete(`${base}/${tenderId}`)
+      .set(auth(writerToken))
+      .expect(403);
+  });
+
   it('refuses to delete a tender that still has guarantees', async () => {
     await http()
       .delete(`${base}/${tenderId}`)
-      .set(auth(writerToken))
+      .set(auth(superToken))
       .expect(409);
     await http()
       .delete(`${base}/guarantees/${pbgId}`)
-      .set(auth(writerToken))
+      .set(auth(superToken))
       .expect(200);
     await http()
       .delete(`${base}/guarantees/${emdId}`)
-      .set(auth(writerToken))
+      .set(auth(superToken))
       .expect(200);
     await http()
       .delete(`${base}/${tenderId}`)
-      .set(auth(writerToken))
+      .set(auth(superToken))
       .expect(200);
   });
 });

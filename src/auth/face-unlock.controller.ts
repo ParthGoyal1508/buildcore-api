@@ -48,6 +48,7 @@ import {
   CONFIRMATION_PURPOSES,
   CONFIRMATION_TOKEN_HEADER,
 } from './password-confirmation.service';
+import { EditorMayDelete } from '../common/record-delete/editor-may-delete.decorator';
 
 const CAPTURE_BODY = livenessMultipartBody(
   {
@@ -108,6 +109,7 @@ export class FaceUnlockController {
     );
   }
 
+  @EditorMayDelete()
   @Delete()
   @Header('Cache-Control', 'no-store')
   @ApiOkResponse({ type: FaceUnlockStatusDto })

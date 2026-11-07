@@ -43,6 +43,7 @@ import { JobCardDto } from './dto/job-card.dto';
 import { JobCardFile, JobCardFlowService } from './job-card-flow.service';
 import { JobCardService } from './job-card.service';
 import { MaintenanceService } from './maintenance.service';
+import { EditorMayDelete } from '../../common/record-delete/editor-may-delete.decorator';
 
 /**
  * Maintenance jobs (006 US5) and the parts consumed on them (US10), gated by
@@ -315,6 +316,7 @@ export class MaintenanceController {
     return this.spareParts.consume(caller, id, dto, ipAddress);
   }
 
+  @EditorMayDelete()
   @Delete('parts/:movementId')
   @ApiOperation({
     summary: 'Reverse a part consumption',

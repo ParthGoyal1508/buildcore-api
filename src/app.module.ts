@@ -8,6 +8,7 @@ import { PrismaShutdownService } from './common/prisma/prisma-shutdown.service';
 import { AppController } from './app.controller';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { OwnRecordsInterceptor } from './common/own-records/own-records.interceptor';
+import { RecordDeleteInterceptor } from './common/record-delete/record-delete.interceptor';
 import {
   AppThrottlerGuard,
   throttlersFor,
@@ -172,6 +173,13 @@ import type { SecurityConfig } from './common/configs/config.interface';
       // obstacle is an expired password, sends somebody to the wrong administrator.
       provide: APP_INTERCEPTOR,
       useClass: CashEntryInterceptor,
+    },
+    {
+      // 2026-11-07: deleting a record is Super Admin only; removing a part of something being
+      // edited (`@EditorMayDelete()`) and the caller's own records are not. After
+      // `PasswordChangeInterceptor`, for the reason given on `CashEntryInterceptor` above.
+      provide: APP_INTERCEPTOR,
+      useClass: RecordDeleteInterceptor,
     },
     {
       // 058: an all-companies user's own records (My Workspace) are read in their home company.

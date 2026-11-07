@@ -35,6 +35,7 @@ import {
   ListContractorsDto,
   UpdateContractorDto,
 } from './dto/contractor.dto';
+import { EditorMayDelete } from '../../common/record-delete/editor-may-delete.decorator';
 
 @ApiTags('Partners')
 @ApiBearerAuth()
@@ -124,6 +125,7 @@ export class ContractorsController {
     res.send(file.buffer);
   }
 
+  @EditorMayDelete()
   @Delete('documents/:documentId')
   @HttpCode(204)
   @ApiOperation({ summary: 'Delete a contractor document and its stored file' })

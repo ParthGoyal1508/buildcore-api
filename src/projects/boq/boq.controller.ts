@@ -34,6 +34,7 @@ import {
   PlanBoqItemDto,
   ValidateBoqImportDto,
 } from './dto/boq.dto';
+import { EditorMayDelete } from '../../common/record-delete/editor-may-delete.decorator';
 
 /**
  * The BOQ: entry, the tree, the alerts, and the two-step tender import (008 US4).
@@ -111,6 +112,7 @@ export class BoqController {
     );
   }
 
+  @EditorMayDelete()
   @Delete('groups/:groupId')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({
@@ -193,6 +195,7 @@ export class BoqController {
     return this.boq.planItem(rlsContextFor(caller), projectId, itemId, body);
   }
 
+  @EditorMayDelete()
   @Delete('items/:itemId')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({ summary: 'Remove a line that nothing measures against' })

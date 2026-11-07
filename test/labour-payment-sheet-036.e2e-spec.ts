@@ -427,9 +427,15 @@ describe('Labour payment sheets, 036 hardening (e2e)', () => {
     });
 
     it('deletes the draft softly, with an audit entry, and frees the day', async () => {
-      const res = await http()
+      // Deleting a sheet is a Super Admin's (2026-11-07).
+      await http()
         .delete(`/labour/payment-sheets/${sheetId}`)
         .set(auth(hr1.token))
+        .send({ reason: 'Wrong punch out' })
+        .expect(403);
+      const res = await http()
+        .delete(`/labour/payment-sheets/${sheetId}`)
+        .set(auth(superUser.token))
         .send({ reason: 'Wrong punch out' })
         .expect(200);
       expect(res.body).toEqual({ id: sheetId, deleted: true });
@@ -441,7 +447,7 @@ describe('Labour payment sheets, 036 hardening (e2e)', () => {
         where: { id: sheetId },
       });
       expect(row.deletedAt).not.toBeNull();
-      expect(row.deletedBy).toBe(hr1.userId);
+      expect(row.deletedBy).toBe(superUser.userId);
       expect(
         await sys.auditLogEntry.count({
           where: { entityId: sheetId, action: 'DELETE' },
@@ -475,7 +481,7 @@ describe('Labour payment sheets, 036 hardening (e2e)', () => {
       await approveSheet(sheetId);
       await http()
         .delete(`/labour/payment-sheets/${sheetId}`)
-        .set(auth(hr1.token))
+        .set(auth(superUser.token))
         .expect(409);
       await http()
         .post(`/labour/payment-sheets/${sheetId}/regenerate`)
@@ -573,7 +579,7 @@ describe('Labour payment sheets, 036 hardening (e2e)', () => {
       // Deleting the sheet that carried it frees the shortfall for the next one, once.
       await http()
         .delete(`/labour/payment-sheets/${b.id}`)
-        .set(auth(hr1.token))
+        .set(auth(superUser.token))
         .expect(200);
       const again = (await generate(site, ago(4)).expect(201)).body;
       expect(

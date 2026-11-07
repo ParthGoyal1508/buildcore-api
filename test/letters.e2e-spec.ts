@@ -58,6 +58,7 @@ describe('Letters (e2e)', () => {
   let financeToken: string;
   let directorToken: string;
   let adminToken: string;
+  let superToken: string;
   let directorUserId: string;
   let financeUserId: string;
   let workOrderLetterId: string;
@@ -161,6 +162,12 @@ describe('Letters (e2e)', () => {
     directorUserId = director.userId;
     const admin = await makeUser('Adm', [Permission.SETTINGS]);
     adminToken = admin.token;
+    superToken = (
+      await makeUser('Sup', [
+        Permission.SETTINGS,
+        Permission.CROSS_COMPANY_ACCESS,
+      ])
+    ).token;
 
     // 016's chain for work orders: one level, the director's, and it is final.
     const actor = { userId: directorUserId, ipAddress: '127.0.0.1' };
@@ -425,9 +432,14 @@ describe('Letters (e2e)', () => {
       where: { companyId, key: 'site_pass' },
     });
     // Give it something to reference: the template created above already does.
-    const res = await http()
+    // Deleting is a Super Admin's (2026-11-07); the administrator is refused before the check.
+    await http()
       .delete(`/letter-kinds/${letterKind.id}`)
       .set(auth(adminToken))
+      .expect(403);
+    const res = await http()
+      .delete(`/letter-kinds/${letterKind.id}`)
+      .set(auth(superToken))
       .expect(409);
 
     expect(res.body.code).toBe('LETTER_KIND_IN_USE');

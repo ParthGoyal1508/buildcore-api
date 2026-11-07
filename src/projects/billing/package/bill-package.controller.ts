@@ -56,6 +56,7 @@ import {
 } from './certified-copy.reader';
 import { contentDispositionFor } from '../../../common/storage/file-type';
 import { listPaging, shapeList } from '../../list-paging';
+import { EditorMayDelete } from '../../../common/record-delete/editor-may-delete.decorator';
 
 const CONTENT_TYPES = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -205,6 +206,7 @@ export class BillPackageController {
     );
   }
 
+  @EditorMayDelete()
   @Delete('projects/bill-packages/:packageId/non-boq-items/:itemId')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({
