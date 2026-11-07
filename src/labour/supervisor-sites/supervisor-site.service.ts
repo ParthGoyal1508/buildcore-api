@@ -82,6 +82,11 @@ export class SupervisorSiteService {
     return allowed === null ? all : all.filter((s) => allowed.includes(s.id));
   }
 
+  /** Every active site of the company the caller works in, named — no assignment applied. */
+  async allSites(caller: AuthenticatedUser): Promise<SiteOption[]> {
+    return this.companySites(caller);
+  }
+
   /**
    * Everyone who can mark labour attendance: holders of labour management, and (058 US4) of the
    * site supervisor's narrow "Labour registration & attendance". One list, each person once.
