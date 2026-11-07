@@ -708,6 +708,83 @@ export class EmployeesService {
   }
 
   /**
+   * The same search and filters as `list`, returning code and name only (2026-11-07). For pickers
+   * in modules that may name an employee but not read their record.
+   */
+  async options(
+    caller: Caller,
+    companyId: string,
+    query: ListEmployeesQueryDto,
+    ids?: string[],
+  ): Promise<{
+    items: {
+      id: string;
+      employeeCode: string;
+      firstName: string | null;
+      lastName: string | null;
+    }[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 25;
+    const term = query.search?.trim();
+    if (ids) {
+      const wanted = [...new Set(ids)].slice(0, 100);
+      const items = await withRlsContext(this.prisma, caller.rls, (tx) =>
+        tx.employee.findMany({
+          where: { companyId, id: { in: wanted } },
+          select: {
+            id: true,
+            employeeCode: true,
+            firstName: true,
+            lastName: true,
+          },
+        }),
+      );
+      return { items, total: items.length, page: 1, pageSize: wanted.length };
+    }
+    const where: Prisma.EmployeeWhereInput = {
+      companyId,
+      isActive: query.isActive ?? true,
+      ...(query.siteId ? { siteId: query.siteId } : {}),
+      ...(term
+        ? {
+            OR: [
+              {
+                employeeCode: { contains: term, mode: 'insensitive' as const },
+              },
+              { firstName: { contains: term, mode: 'insensitive' as const } },
+              { lastName: { contains: term, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
+    const [items, total] = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) =>
+        Promise.all([
+          tx.employee.findMany({
+            where,
+            select: {
+              id: true,
+              employeeCode: true,
+              firstName: true,
+              lastName: true,
+            },
+            orderBy: employeeOrder(query.sort),
+            skip: (page - 1) * pageSize,
+            take: pageSize,
+          }),
+          tx.employee.count({ where }),
+        ]),
+    );
+    return { items, total, page, pageSize };
+  }
+
+  /**
    * Every active employee in the company, as the bulk shift screen needs them (036).
    *
    * The whole roster in one read, so that screen's search, filters and "select all" work on

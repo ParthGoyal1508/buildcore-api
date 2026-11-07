@@ -44,6 +44,8 @@ export class CompositeItemsController {
     private readonly inventoryItems: InventoryItemsService,
   ) {}
 
+  // Reading the list is open to whoever uses it (stock and issue screens list composite items); changing it is not (2026-11-07).
+  @RequirePermissions(Permission.SETTINGS, Permission.INVENTORY)
   @Get()
   @ApiOperation({ summary: 'Paginated composite items with their sub-items' })
   async findAll(

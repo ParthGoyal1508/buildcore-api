@@ -41,6 +41,12 @@ import { HireRatesService } from '../../settings/machinery-masters/hire-rates.se
 export class HireRatesController {
   constructor(private readonly rates: HireRatesService) {}
 
+  // Reading the list is open to whoever uses it (a hire bill is priced from these rates); changing it is not (2026-11-07).
+  @RequirePermissions(
+    Permission.SETTINGS,
+    Permission.MACHINERY,
+    Permission.HIRE_BILLS,
+  )
   @Get()
   @ApiOperation({
     summary: 'Effective-dated hire rate history',

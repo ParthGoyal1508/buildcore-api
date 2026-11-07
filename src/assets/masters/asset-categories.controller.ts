@@ -49,6 +49,8 @@ export class AssetCategoriesController {
     private readonly assets: AssetService,
   ) {}
 
+  // Reading the list is open to whoever uses it (the asset register and forms pick a category); changing it is not (2026-11-07).
+  @RequirePermissions(Permission.SETTINGS, Permission.ASSETS)
   @Get()
   @ApiOperation({
     summary: 'Every asset category, with its asset count and book value',

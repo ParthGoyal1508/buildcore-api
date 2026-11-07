@@ -4,10 +4,10 @@
  * 1. Creates the module roles that are missing (`npm run roles:modules` does the same alone).
  * 2. Writes the seven sheet roles (`CLIENT_ROLES`): permissions, levels and "works in all
  *    companies". An existing role of that name is rewritten to match the sheet.
- * 3. Approvals: maps the `hr` slot to Operations Manager in every company, and moves the chains
- *    whose default changed onto the new shape — what an employee asks for themselves goes
- *    Operations Manager → Director, what a department enters goes to the Director alone. Items
- *    already part-way through keep the chain they entered.
+ * 3. Approvals: maps the `hr` slot to Operations Manager in every company, and brings every chain
+ *    to its default shape — what an employee asks for themselves goes Operations Manager →
+ *    Director, what a department enters goes to the Director alone. Items already part-way
+ *    through keep the chain they entered.
  * 4. Removes every other role (`rolesToRemove`) and the accounts that held them:
  *    - an account left with nothing but General User (or nothing at all) goes;
  *    - an account that also holds a kept role, or Super Admin, only loses the removed role;
@@ -46,17 +46,16 @@ import { moduleRoles } from '../src/settings/roles/module-roles';
 const APPLY = process.env.APPLY === '1';
 const OPERATIONS_MANAGER = 'Operations Manager';
 
-/** The chains whose default shape changed on 2026-11-07. */
-const CHANGED_ACTIONS = new Set([
-  'attendance_exception',
-  'attendance_correction',
-  'operator_fuel_recovery',
-  'leave_application',
-  'reimbursement_claim',
-  'employee_loan',
-  'salary_advance',
-  'labour_advance',
-]);
+/**
+ * Every chain is brought back to its default shape (2026-11-07). The client's rule: what an employee
+ * asks for themselves goes Operations Manager → Director; what a department enters goes to the
+ * Director alone. Chains customised before then (a "Head Office" first step on bills, letters and
+ * DWRs, a "Site Incharge" step on RA bills) would otherwise send department work to the Operations
+ * Manager — or, for an RA bill, to a role that no longer exists.
+ */
+const CHANGED_ACTIONS = new Set(
+  DEFAULT_COMPANY_CHAINS.map(([actionType]) => actionType),
+);
 
 function assertTarget(): void {
   const url = process.env.DATABASE_URL ?? '';

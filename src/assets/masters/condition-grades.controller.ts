@@ -45,6 +45,8 @@ export class ConditionGradesController {
     private readonly assets: AssetService,
   ) {}
 
+  // Reading the list is open to whoever uses it (the asset forms pick a condition grade); changing it is not (2026-11-07).
+  @RequirePermissions(Permission.SETTINGS, Permission.ASSETS)
   @Get()
   @ApiOperation({ summary: 'Every condition grade, best first' })
   async findAll(

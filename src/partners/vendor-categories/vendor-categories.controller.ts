@@ -44,6 +44,12 @@ import { PartnerVendorCategoriesService } from './vendor-categories.service';
 export class VendorCategoriesController {
   constructor(private readonly categories: PartnerVendorCategoriesService) {}
 
+  // Reading the list is open to whoever uses it (the vendor list and form show and pick a category); changing it is not (2026-11-07).
+  @RequirePermissions(
+    Permission.SETTINGS,
+    Permission.PARTNERS,
+    Permission.INVENTORY,
+  )
   @Get()
   @ApiOperation({
     summary: 'Vendor categories with the number of vendors using each',

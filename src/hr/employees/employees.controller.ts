@@ -28,6 +28,7 @@ import { callerFrom } from '../caller-context';
 import {
   BulkShiftDto,
   CreateEmployeeDto,
+  EmployeeOptionsQueryDto,
   ListEmployeesQueryDto,
   RevealPiiDto,
 } from './dto/create-employee.dto';
@@ -89,6 +90,45 @@ export class EmployeesController {
       callerFrom(user, request),
       this.companyOf(user, companyId),
       query,
+    );
+  }
+
+  /**
+   * Active employees by name or code, for the pickers outside HR (2026-11-07): the logbook and fuel
+   * operator, an asset allocation, a project's people, a resignation, an interview panel. Code and
+   * name only — the full list above carries contact and job details only HR may read. `ids` (comma
+   * separated, up to 100) names particular people instead, leavers included, so a list can show the
+   * name of whoever a row is about.
+   *
+   * Declared before `:id`, which would otherwise read `options` as an employee id.
+   */
+  @Get('options')
+  @RequirePermissions(
+    Permission.EMPLOYEES,
+    Permission.ATTENDANCE,
+    Permission.PAYROLL,
+    Permission.LOANS,
+    Permission.MACHINERY,
+    Permission.LOGBOOK,
+    Permission.FUEL,
+    Permission.MAINTENANCE,
+    Permission.ASSETS,
+    Permission.PROJECTS,
+    Permission.RECRUITMENT,
+  )
+  @ApiOperation({ summary: 'Employee code and name, for pickers outside HR' })
+  async options(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Query() query: EmployeeOptionsQueryDto,
+    @Query('companyId') companyId?: string,
+  ) {
+    const { ids, ...filters } = query;
+    return this.employees.options(
+      callerFrom(user, request),
+      this.companyOf(user, companyId),
+      filters,
+      ids ? ids.split(',').filter(Boolean) : undefined,
     );
   }
 
