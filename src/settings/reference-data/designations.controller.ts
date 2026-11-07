@@ -38,6 +38,8 @@ import { ReferenceDataService } from './reference-data.service';
 export class DesignationsController {
   constructor(private readonly referenceData: ReferenceDataService) {}
 
+  // Reading the list is open to whoever uses it (a recruitment requisition picks a designation); changing it is not (2026-11-07).
+  @RequirePermissions(Permission.EMPLOYEES, Permission.RECRUITMENT)
   @Get()
   @ApiOperation({ summary: "List this company's Designation entries" })
   @ApiQuery({

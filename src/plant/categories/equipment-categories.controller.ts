@@ -51,6 +51,15 @@ export class EquipmentCategoriesController {
     private readonly equipment: EquipmentService,
   ) {}
 
+  // Reading the list is open to whoever uses it (Plant & Machinery picks a category on every machine form); changing it is not (2026-11-07).
+  @RequirePermissions(
+    Permission.SETTINGS,
+    Permission.MACHINERY,
+    Permission.LOGBOOK,
+    Permission.FUEL,
+    Permission.MAINTENANCE,
+    Permission.HIRE_BILLS,
+  )
   @Get()
   @ApiOperation({
     summary: 'Every equipment category, with its equipment count',

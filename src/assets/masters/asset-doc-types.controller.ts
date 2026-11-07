@@ -40,6 +40,8 @@ export class AssetDocTypesController {
     private readonly assets: AssetService,
   ) {}
 
+  // Reading the list is open to whoever uses it (asset documents pick a document type); changing it is not (2026-11-07).
+  @RequirePermissions(Permission.SETTINGS, Permission.ASSETS)
   @Get()
   @ApiOperation({ summary: 'Every asset document type' })
   async findAll(

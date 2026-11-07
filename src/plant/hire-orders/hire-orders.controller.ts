@@ -39,6 +39,8 @@ import { HireOrdersService } from './hire-orders.service';
 export class HireOrdersController {
   constructor(private readonly orders: HireOrdersService) {}
 
+  // A hire bill is raised against one of these orders (2026-11-07).
+  @RequirePermissions(Permission.MACHINERY, Permission.HIRE_BILLS)
   @Get()
   @ApiOperation({ summary: 'Hire orders, newest first' })
   async findAll(

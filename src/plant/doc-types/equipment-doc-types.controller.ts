@@ -39,6 +39,8 @@ import { EquipmentDocTypesService } from '../../settings/machinery-masters/equip
 export class EquipmentDocTypesController {
   constructor(private readonly docTypes: EquipmentDocTypesService) {}
 
+  // Reading the list is open to whoever uses it (the machine form and its documents pick a document type); changing it is not (2026-11-07).
+  @RequirePermissions(Permission.SETTINGS, Permission.MACHINERY)
   @Get()
   @ApiOperation({ summary: 'Every equipment document type' })
   async findAll(

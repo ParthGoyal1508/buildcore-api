@@ -67,7 +67,15 @@ export class EquipmentController {
    * 403 every time it opened. One machine, its documents and every write stay `MACHINERY`.
    */
   @Get()
-  @RequirePermissions(Permission.MACHINERY, Permission.INVENTORY)
+  // The machine picker on logbook, fuel, job card and hire bill forms reads this list (2026-11-07).
+  @RequirePermissions(
+    Permission.MACHINERY,
+    Permission.INVENTORY,
+    Permission.LOGBOOK,
+    Permission.FUEL,
+    Permission.MAINTENANCE,
+    Permission.HIRE_BILLS,
+  )
   @ApiOperation({
     summary: 'Paginated asset register',
     description:

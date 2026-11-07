@@ -600,3 +600,15 @@ export class RevealPiiDto {
   @IsEnum(['aadhaar', 'pan', 'bankAccountNumber', 'uan'] as never)
   field: 'aadhaar' | 'pan' | 'bankAccountNumber' | 'uan';
 }
+
+/** `GET /hr/employees/options` (2026-11-07): the list's filters, or particular people by id. */
+export class EmployeeOptionsQueryDto extends ListEmployeesQueryDto {
+  @ApiPropertyOptional({
+    description:
+      'Comma-separated employee ids (up to 100), leavers included. When given, the other filters are ignored.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  ids?: string;
+}
