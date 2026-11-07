@@ -36,6 +36,11 @@ export class LabourSheetsController {
     send(response, await this.sheets.attendanceSheet(caller, query));
   }
 
+  @RequirePermissions(
+    Permission.DAILY_WORKER_REGISTRY,
+    Permission.LABOUR_APPROVE,
+    Permission.PAYMENTS,
+  )
   @Get('payment/:id')
   @ApiOperation({ summary: 'A labour payment sheet as a printable XLSX' })
   async payment(

@@ -43,6 +43,7 @@ import { ServiceBillsService } from './service-bills.service';
 export class ServiceBillsController {
   constructor(private readonly serviceBills: ServiceBillsService) {}
 
+  @RequirePermissions(Permission.MAINTENANCE, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary: 'Paginated service bills with a pending-payment total',
@@ -84,6 +85,7 @@ export class ServiceBillsController {
     return this.serviceBills.verify(caller, id, ipAddress);
   }
 
+  @RequirePermissions(Permission.MAINTENANCE, Permission.PAYMENTS)
   @Patch(':id/pay')
   @ApiOperation({
     summary: 'Record a payment',

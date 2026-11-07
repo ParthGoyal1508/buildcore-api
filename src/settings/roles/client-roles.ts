@@ -127,6 +127,10 @@ export const CLIENT_ROLES: ClientRole[] = [
     name: 'Cashier',
     allCompanies: true,
     grants: [
+      // Each module's payment screen, read-only except recording a payment or a client receipt
+      // (client, 2026-11-07). Cash Payments alone opens no screen: it only adds cash to the
+      // payment forms of modules the person can already open.
+      [Permission.PAYMENTS, both],
       [Permission.CASH_ENTRY, both],
       [Permission.MY_WORKSPACE, both],
     ],

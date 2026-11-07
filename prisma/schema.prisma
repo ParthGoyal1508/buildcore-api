@@ -482,6 +482,9 @@ enum Permission {
   /// their assigned sites. Everything else in Labour (muster attendance, payment sheets, musters,
   /// advances, rates, editing a labour) stays `DAILY_WORKER_REGISTRY` ("Labour management").
   LABOUR_ATTENDANCE
+  /// The Cashier (2026-11-07): each module's payment screen, read-only except recording a
+  /// payment or a client receipt.
+  PAYMENTS
 
   @@schema("settings")
 }

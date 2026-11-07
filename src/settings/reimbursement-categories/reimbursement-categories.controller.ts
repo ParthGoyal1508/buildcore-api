@@ -59,6 +59,7 @@ export class ReimbursementCategoriesController {
     return { userId: user.id, ipAddress: clientIpOf(request) };
   }
 
+  @RequirePermissions(Permission.EMPLOYEES, Permission.PAYMENTS)
   @Get()
   @ApiOperation({ summary: 'Every category, active or not' })
   async findAll(

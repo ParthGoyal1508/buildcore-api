@@ -115,6 +115,7 @@ export class EmployeesController {
     Permission.ASSETS,
     Permission.PROJECTS,
     Permission.RECRUITMENT,
+    Permission.PAYMENTS,
   )
   @ApiOperation({ summary: 'Employee code and name, for pickers outside HR' })
   async options(

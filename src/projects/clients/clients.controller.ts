@@ -31,6 +31,7 @@ import { UpdateClientDto } from './dto/update-client.dto';
 export class ClientsController {
   constructor(private readonly clients: ClientsService) {}
 
+  @RequirePermissions(Permission.PROJECTS, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary: 'Paginated client list with search and status filter',

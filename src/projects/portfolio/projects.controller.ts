@@ -58,6 +58,7 @@ export class ProjectsController {
     Permission.PROJECTS,
     Permission.INVENTORY,
     Permission.DAILY_WORKER_REGISTRY,
+    Permission.PAYMENTS,
   )
   @ApiOperation({
     summary: 'Paginated portfolio list with search, status and client filters',
@@ -98,6 +99,7 @@ export class ProjectsController {
     return this.projects.nextCode(caller, companyId);
   }
 
+  @RequirePermissions(Permission.PROJECTS, Permission.PAYMENTS)
   @Get(':id')
   @ApiOperation({
     summary: 'One project with its aggregated tab data',

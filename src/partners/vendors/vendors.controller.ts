@@ -41,7 +41,11 @@ export class VendorsController {
    * vendor, and its TDS position, stay `PARTNERS`.
    */
   @Get()
-  @RequirePermissions(Permission.PARTNERS, Permission.INVENTORY)
+  @RequirePermissions(
+    Permission.PARTNERS,
+    Permission.INVENTORY,
+    Permission.PAYMENTS,
+  )
   @ApiOperation({ summary: 'Paginated vendor list with search and filters' })
   async findAll(
     @UserEntity() caller: AuthenticatedUser,
@@ -68,7 +72,11 @@ export class VendorsController {
   }
 
   @Get(':id')
-  @RequirePermissions(Permission.PARTNERS, Permission.INVENTORY)
+  @RequirePermissions(
+    Permission.PARTNERS,
+    Permission.INVENTORY,
+    Permission.PAYMENTS,
+  )
   @ApiOperation({
     summary: 'One vendor with contacts, categories and hire terms',
   })

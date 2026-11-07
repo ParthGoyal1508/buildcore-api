@@ -6458,6 +6458,7 @@ Enum Permission {
   BANK_GUARANTEES
   INVENTORY_SITE_ENTRY
   LABOUR_ATTENDANCE
+  PAYMENTS
 }
 
 Enum CompanyStatus {

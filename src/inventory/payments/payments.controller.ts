@@ -45,6 +45,7 @@ import { contentDispositionFor } from '../../common/storage/file-type';
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
+  @RequirePermissions(Permission.INVENTORY, Permission.PAYMENTS)
   @Get('payments')
   @ApiOperation({
     summary: 'Paginated payment list',
@@ -59,6 +60,7 @@ export class PaymentsController {
     return this.payments.findAll(caller, query);
   }
 
+  @RequirePermissions(Permission.INVENTORY, Permission.PAYMENTS)
   @Get('bills')
   @ApiOperation({
     summary: "A vendor's outstanding bills and their total",
@@ -73,6 +75,7 @@ export class PaymentsController {
     return this.payments.findBills(caller, query);
   }
 
+  @RequirePermissions(Permission.INVENTORY, Permission.PAYMENTS)
   @Post('payments')
   @ApiOperation({
     summary: 'Record a payment to a vendor',
@@ -106,6 +109,7 @@ export class PaymentsController {
     return this.payments.create(caller, dto, ipAddress, companyId, key);
   }
 
+  @RequirePermissions(Permission.INVENTORY, Permission.PAYMENTS)
   @Post('payments/:id/proof')
   @ApiOperation({
     summary: 'Attach the RTGS advice or transaction confirmation (017 FR-020)',
@@ -131,6 +135,7 @@ export class PaymentsController {
     );
   }
 
+  @RequirePermissions(Permission.INVENTORY, Permission.PAYMENTS)
   @Get('payments/:id/proof')
   @ApiOperation({
     summary: 'Open the proof without leaving the payment (FR-020 scenario 3)',

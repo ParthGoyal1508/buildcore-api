@@ -21,6 +21,7 @@ const SINGLE_ABILITY: ReadonlySet<Permission> = new Set([
   Permission.PROJECT_LOCK,
   Permission.MAINTENANCE_PAY,
   Permission.INVENTORY_SITE_ENTRY,
+  Permission.PAYMENTS,
 ]);
 
 /**
@@ -51,6 +52,7 @@ const LABELS: Partial<Record<Permission, string>> = {
   [Permission.PROJECT_LOCK]: 'Lock or Unlock a Project',
   [Permission.PROJECT_FINANCIALS]: 'Project Billing & Finance',
   [Permission.CASH_ENTRY]: 'Cash Payments',
+  [Permission.PAYMENTS]: 'Record Payments',
   [Permission.SETTINGS]: 'Masters & Setup',
   [Permission.USER_MANAGEMENT]: 'Users & Roles',
   [Permission.COMPANY_SETTINGS]: 'Company Setup',

@@ -54,6 +54,11 @@ export class ReimbursementsAdminController {
     return resolveCompanyId(user, requested);
   }
 
+  @RequirePermissions(
+    Permission.EMPLOYEES,
+    Permission.PAYROLL,
+    Permission.PAYMENTS,
+  )
   @Get()
   @ApiOperation({
     summary: 'Claims awaiting review, filterable',
@@ -73,6 +78,11 @@ export class ReimbursementsAdminController {
     );
   }
 
+  @RequirePermissions(
+    Permission.EMPLOYEES,
+    Permission.PAYROLL,
+    Permission.PAYMENTS,
+  )
   @Get('register')
   @ApiOperation({
     summary: 'The Reimbursement Register with status subtotals',
@@ -90,6 +100,11 @@ export class ReimbursementsAdminController {
     );
   }
 
+  @RequirePermissions(
+    Permission.EMPLOYEES,
+    Permission.PAYROLL,
+    Permission.PAYMENTS,
+  )
   @Get(':id/receipt')
   @ApiOperation({
     summary: "Open a claim's receipt (036 F17)",
@@ -143,7 +158,7 @@ export class ReimbursementsAdminController {
   }
 
   @Patch(':id/pay')
-  @RequirePermissions(Permission.PAYROLL)
+  @RequirePermissions(Permission.PAYROLL, Permission.PAYMENTS)
   @ApiOperation({
     summary: 'Settle an approved claim',
     description:
