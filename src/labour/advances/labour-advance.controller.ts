@@ -29,6 +29,7 @@ import { LabourAdvanceService } from './labour-advance.service';
 export class LabourAdvanceController {
   constructor(private readonly advances: LabourAdvanceService) {}
 
+  @RequirePermissions(Permission.DAILY_WORKER_REGISTRY, Permission.PAYMENTS)
   @Get()
   @ApiOperation({ summary: 'List labour advances with outstanding balances' })
   async findAll(
@@ -90,7 +91,7 @@ export class LabourAdvanceController {
   }
 
   @Patch(':id/disburse')
-  @RequirePermissions(Permission.LABOUR_APPROVE)
+  @RequirePermissions(Permission.LABOUR_APPROVE, Permission.PAYMENTS)
   @ApiOperation({ summary: 'Disburse an approved advance (LABOUR_APPROVE)' })
   async disburse(
     @UserEntity() caller: AuthenticatedUser,

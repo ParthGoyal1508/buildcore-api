@@ -46,6 +46,7 @@ import {
 export class ClientReceiptsController {
   constructor(private readonly receipts: ClientReceiptsService) {}
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary:
@@ -62,6 +63,7 @@ export class ClientReceiptsController {
     return this.receipts.forBill(rlsContextFor(caller), billId);
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Post()
   @UseGuards(ProjectLockGuard)
   @ProjectLockFrom('clientBill')
@@ -114,6 +116,7 @@ export class ClientReceiptsController {
 export class ClientHoldingsController {
   constructor(private readonly receipts: ClientReceiptsService) {}
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary:

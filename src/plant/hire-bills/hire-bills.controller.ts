@@ -47,6 +47,7 @@ import { HireBillsService } from './hire-bills.service';
 export class HireBillsController {
   constructor(private readonly hireBills: HireBillsService) {}
 
+  @RequirePermissions(Permission.HIRE_BILLS, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary:
@@ -59,6 +60,7 @@ export class HireBillsController {
     return this.hireBills.findAll(caller, query);
   }
 
+  @RequirePermissions(Permission.HIRE_BILLS, Permission.PAYMENTS)
   @Get('export.xlsx')
   @ExportThrottle()
   @ApiOperation({
@@ -80,6 +82,7 @@ export class HireBillsController {
     res.send(buffer);
   }
 
+  @RequirePermissions(Permission.HIRE_BILLS, Permission.PAYMENTS)
   @Get('logbook-summary')
   @ApiOperation({
     summary: "The logbook over a period, for the bill form's preview (036 K9)",
@@ -110,6 +113,7 @@ export class HireBillsController {
     return this.hireBills.create(caller, dto, ipAddress);
   }
 
+  @RequirePermissions(Permission.HIRE_BILLS, Permission.PAYMENTS)
   @Get(':id/document.:format')
   @ApiOperation({
     summary:
@@ -156,6 +160,7 @@ export class HireBillsController {
     return this.hireBills.verify(caller, id, ipAddress);
   }
 
+  @RequirePermissions(Permission.HIRE_BILLS, Permission.PAYMENTS)
   @Patch(':id/pay')
   @ApiOperation({
     summary: 'Record payment',

@@ -81,6 +81,7 @@ export class MaintenanceController {
     return this.jobCards.prefill(caller, equipmentId);
   }
 
+  @RequirePermissions(Permission.MAINTENANCE, Permission.PAYMENTS)
   @Get(':id/job-card.:format')
   @ApiOperation({ summary: 'The job card as PDF, Excel or Word' })
   async jobCardDocument(
@@ -95,6 +96,7 @@ export class MaintenanceController {
     sendForm(res, await this.jobCards.document(caller, id, kind));
   }
 
+  @RequirePermissions(Permission.MAINTENANCE, Permission.PAYMENTS)
   @Get(':id/job-card')
   @ApiOperation({ summary: "The job's maintenance job card" })
   async jobCard(
@@ -169,7 +171,11 @@ export class MaintenanceController {
   }
 
   @Get(':id/job-card/payments')
-  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @RequirePermissions(
+    Permission.MAINTENANCE,
+    Permission.MAINTENANCE_PAY,
+    Permission.PAYMENTS,
+  )
   @ApiOperation({
     summary: "The final bill's payments, the paid total and the balance",
   })
@@ -181,7 +187,7 @@ export class MaintenanceController {
   }
 
   @Post(':id/job-card/payments')
-  @RequirePermissions(Permission.MAINTENANCE_PAY)
+  @RequirePermissions(Permission.MAINTENANCE_PAY, Permission.PAYMENTS)
   @ApiOperation({
     summary: 'Record a payment against the final bill (Head Office)',
     description:
@@ -199,7 +205,11 @@ export class MaintenanceController {
   }
 
   @Get(':id/job-card/history')
-  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @RequirePermissions(
+    Permission.MAINTENANCE,
+    Permission.MAINTENANCE_PAY,
+    Permission.PAYMENTS,
+  )
   @ApiOperation({
     summary: 'Who did what to the job card, and when — oldest first',
   })
@@ -211,7 +221,11 @@ export class MaintenanceController {
   }
 
   @Get(':id/job-card/quotation/file')
-  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @RequirePermissions(
+    Permission.MAINTENANCE,
+    Permission.MAINTENANCE_PAY,
+    Permission.PAYMENTS,
+  )
   @ApiOperation({ summary: 'Download the quotation' })
   async quotationFile(
     @UserEntity() caller: AuthenticatedUser,
@@ -222,7 +236,11 @@ export class MaintenanceController {
   }
 
   @Get(':id/job-card/final-bill/file')
-  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @RequirePermissions(
+    Permission.MAINTENANCE,
+    Permission.MAINTENANCE_PAY,
+    Permission.PAYMENTS,
+  )
   @ApiOperation({ summary: 'Download the final bill' })
   async finalBillFile(
     @UserEntity() caller: AuthenticatedUser,
@@ -233,7 +251,11 @@ export class MaintenanceController {
   }
 
   @Get(':id/job-card/payments/:paymentId/proof')
-  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @RequirePermissions(
+    Permission.MAINTENANCE,
+    Permission.MAINTENANCE_PAY,
+    Permission.PAYMENTS,
+  )
   @ApiOperation({ summary: "Download a payment's proof" })
   async paymentProof(
     @UserEntity() caller: AuthenticatedUser,
@@ -244,6 +266,7 @@ export class MaintenanceController {
     sendFile(res, await this.jobCardFlow.paymentProof(caller, id, paymentId));
   }
 
+  @RequirePermissions(Permission.MAINTENANCE, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary: 'Paginated maintenance jobs',

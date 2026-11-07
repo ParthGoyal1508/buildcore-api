@@ -47,6 +47,7 @@ import { listPaging } from '../list-paging';
 export class ClientBillsController {
   constructor(private readonly bills: ClientBillsService) {}
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary: 'Every client bill on a project, newest first',
@@ -75,6 +76,7 @@ export class ClientBillsController {
    * data problem to look at, when it is a routing one. The projects module header carries the same
    * note about `/projects/document-requirements` for the same reason.
    */
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get('boq')
   @ApiOperation({
     summary:
@@ -105,6 +107,7 @@ export class ClientBillsController {
     return this.bills.billableBoq(rlsContextFor(caller), projectId);
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get(':id')
   @ApiOperation({ summary: 'One bill with its measured lines' })
   async view(@UserEntity() caller: AuthenticatedUser, @Param('id') id: string) {
@@ -204,6 +207,7 @@ export class ClientBillsController {
     });
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get(':id/certificate')
   @ApiOperation({
     summary: 'Download the client’s certification document (2026-10-11)',

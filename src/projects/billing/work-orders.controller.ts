@@ -59,6 +59,7 @@ export class WorkOrdersController {
     private readonly approvals: ApprovalService,
   ) {}
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary: 'Every work order on a project, newest first',
@@ -96,6 +97,7 @@ export class WorkOrdersController {
     );
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get(':id')
   @ApiOperation({
     summary: 'One work order, with the caller’s place in its award approval',

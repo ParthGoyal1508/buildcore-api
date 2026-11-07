@@ -52,6 +52,7 @@ import { listPaging } from '../list-paging';
 export class RaBillsController {
   constructor(private readonly bills: RaBillsService) {}
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary: 'Every RA bill on a project, newest first',
@@ -81,6 +82,7 @@ export class RaBillsController {
    * parameterised route first this path would be answered as "RA bill awards not found" — which
    * reads as a missing bill rather than as a route that never matched.
    */
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get('awards/:workOrderId')
   @ApiOperation({
     summary: 'The award with what has been measured against it (FR-007)',
@@ -105,6 +107,7 @@ export class RaBillsController {
    * **Also before `@Get(':id')`**, for the reason above: `retention` is a literal segment that the
    * parameterised route would otherwise swallow.
    */
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get('retention/:workOrderId')
   @ApiOperation({
     summary:
@@ -277,6 +280,7 @@ export class RaBillsController {
     );
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get(':id')
   @ApiOperation({
     summary:

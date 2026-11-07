@@ -189,7 +189,9 @@ export class SupervisorSiteService {
   private seesEverySite(caller: AuthenticatedUser): boolean {
     return (
       rlsContextFor(caller).isSuperAdmin ||
-      caller.permissions.includes(Permission.LABOUR_APPROVE)
+      caller.permissions.includes(Permission.LABOUR_APPROVE) ||
+      // The Cashier (2026-11-07) pays labour at every site.
+      caller.permissions.includes(Permission.PAYMENTS)
     );
   }
 

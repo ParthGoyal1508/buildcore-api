@@ -62,6 +62,7 @@ export class BillPaymentsController {
 
   // ── Payments ─────────────────────────────────────────────────────────────
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Post('projects/ra-bills/:raBillId/payments')
   @ApiOperation({
     summary: 'Record a payment against a certified bill',
@@ -93,6 +94,7 @@ export class BillPaymentsController {
     );
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get('projects/ra-bills/:raBillId/payee')
   @ApiOperation({
     summary:
@@ -111,6 +113,7 @@ export class BillPaymentsController {
     );
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Patch('projects/ra-bills/:raBillId/payee/bank')
   @ApiOperation({
     summary: 'Fill in the payee’s bank details from the bill being paid',
@@ -131,6 +134,7 @@ export class BillPaymentsController {
     );
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get('projects/ra-bill-payments/:paymentId/advice.:format')
   @ApiOperation({
     summary: 'The payment advice for one payment, as PDF or Word',
@@ -182,6 +186,7 @@ export class BillPaymentsController {
     return { removed: true };
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get('projects/ra-bills/:raBillId/outstanding')
   @ApiOperation({
     summary: 'What one bill is owed',
@@ -247,6 +252,7 @@ export class BillPaymentsController {
     );
   }
 
+  @RequirePermissions(Permission.PROJECT_FINANCIALS, Permission.PAYMENTS)
   @Get('projects/ra-bills/:raBillId/signed-copies')
   @ApiOperation({ summary: 'Every copy filed against a bill' })
   async listBillSignedCopies(

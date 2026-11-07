@@ -27,9 +27,11 @@ export class SupervisorSiteController {
 
   @Get('my-sites')
   // 058 US4: a site supervisor holding only the narrow permission needs their own sites too.
+  // The Cashier (2026-11-07) filters payment sheets by site.
   @RequirePermissions(
     Permission.DAILY_WORKER_REGISTRY,
     Permission.LABOUR_ATTENDANCE,
+    Permission.PAYMENTS,
   )
   @ApiOperation({
     summary: 'The sites the caller may register labour and mark attendance at',

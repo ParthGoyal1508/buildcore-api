@@ -31,6 +31,7 @@ import { CreateBocwPaymentDto, ListBocwQueryDto } from './dto/bocw.dto';
 export class BOCWController {
   constructor(private readonly bocw: BOCWService) {}
 
+  @RequirePermissions(Permission.PARTNERS, Permission.PAYMENTS)
   @Get()
   @ApiOperation({
     summary: 'Cess liability and balance per project',
@@ -50,6 +51,7 @@ export class BOCWController {
     });
   }
 
+  @RequirePermissions(Permission.PARTNERS, Permission.PAYMENTS)
   @Get('export')
   // Every project's liability and payments, rendered to a workbook (036 N6, B9).
   @ExportThrottle()
@@ -68,6 +70,7 @@ export class BOCWController {
     res.send(buffer);
   }
 
+  @RequirePermissions(Permission.PARTNERS, Permission.PAYMENTS)
   @Get(':projectId/payments')
   @ApiOperation({ summary: 'Cess payments recorded against one project' })
   async listPayments(
@@ -78,6 +81,7 @@ export class BOCWController {
     return this.bocw.listPayments(caller, projectId, companyId);
   }
 
+  @RequirePermissions(Permission.PARTNERS, Permission.PAYMENTS)
   @Post(':projectId/payments')
   @ApiOperation({ summary: 'Record a cess payment against a project' })
   async recordPayment(

@@ -36,6 +36,7 @@ import { PaymentSheetService } from './payment-sheet.service';
 export class PaymentSheetController {
   constructor(private readonly sheets: PaymentSheetService) {}
 
+  @RequirePermissions(Permission.DAILY_WORKER_REGISTRY, Permission.PAYMENTS)
   @Get()
   @ApiOperation({ summary: 'List payment sheets' })
   async findAll(
@@ -45,6 +46,7 @@ export class PaymentSheetController {
     return this.sheets.findAll(caller, query);
   }
 
+  @RequirePermissions(Permission.DAILY_WORKER_REGISTRY, Permission.PAYMENTS)
   @Get(':id')
   @ApiOperation({
     summary: 'Payment sheet detail with per-line figures and summary',
@@ -142,6 +144,7 @@ export class PaymentSheetController {
     return this.sheets.reopen(caller, id, dto.reason, ip);
   }
 
+  @RequirePermissions(Permission.DAILY_WORKER_REGISTRY, Permission.PAYMENTS)
   @Patch('lines/:lineId/disburse')
   @ApiOperation({
     summary: 'Disburse a payment line',
