@@ -70,3 +70,22 @@ The new specs cover:
 5. **Module roles (US5)**: `npm run roles:modules` on the local DB creates the "<Module> — View" /
    "<Module> — Edit" roles and the single-ability roles. Running it again creates none. A remote
    database needs `-- --host <host>`.
+
+## Added 2026-11-07 (client answers to the roles sheet)
+
+6. **Delete is Super Admin only**: as any user without Super Admin, Delete, Discard and Remove are
+   gone from whole records (purchases, issues, projects, bills, masters, users, roles…), and
+   `DELETE` on such a route answers 403 `DELETE_SUPER_ADMIN_ONLY`. The following still work for
+   whoever may edit:
+   - removing a BOQ line, a draft bill's extra item, a photo, an attachment or a document;
+   - the person's own draft claim.
+   `record-delete.coverage.spec.ts` lists the routes that stay open.
+7. **Purchase Manager at every store**: a user with Inventory "Add & edit" and site delivery
+   entry can pick any active site of the company they work in. A Site Incharge without Inventory
+   editing still sees only their assigned sites.
+8. **Approvals**:
+   - A leave, claim, loan, salary advance or attendance exception waits for the Operations
+     Manager, then the Director.
+   - An attendance correction, labour advance or fuel recovery waits for the Director only.
+9. **Roles sheet**: `npm run roles:client` prints what it would do. `APPLY=1` writes. A remote
+   database needs `-- --host <host>`. A second run reports nothing to do.
