@@ -645,7 +645,7 @@ describe('ChainsService', () => {
       roleSlotMapping: { upsert: jest.fn().mockResolvedValue({}) },
     });
 
-    it('seeds the three-level shape and maps all three slots', async () => {
+    it('seeds Operations Manager → Director and maps every slot it is given', async () => {
       const tx: Record<string, any> = seedTx();
       const service = new ChainsService(
         createPrismaMock() as never,
@@ -664,10 +664,9 @@ describe('ChainsService', () => {
 
       const created = tx.approvalChain.create.mock.calls[0][0].data;
       expect(created.actionType).toBe('attendance_exception');
-      expect(created.levels.create).toHaveLength(3);
       expect(
         created.levels.create.map((l: { slotKey: string }) => l.slotKey),
-      ).toEqual([SLOT_FIRST_APPROVER, SLOT_HR, SLOT_FINAL]);
+      ).toEqual([SLOT_HR, SLOT_FINAL]);
 
       const mapped = new Map<string, string>(
         tx.roleSlotMapping.upsert.mock.calls.map(
@@ -675,10 +674,8 @@ describe('ChainsService', () => {
             [c[0].create.slotKey, c[0].create.roleId] as [string, string],
         ),
       );
-      expect([...mapped.keys()].sort()).toEqual(
-        [SLOT_FINAL, SLOT_FIRST_APPROVER, SLOT_HR].sort(),
-      );
-      expect(mapped.get(SLOT_FIRST_APPROVER)).toBe('role-site');
+      // Only the slots the default chains name: no default chain uses `first_approver` now.
+      expect([...mapped.keys()].sort()).toEqual([SLOT_FINAL, SLOT_HR].sort());
       expect(mapped.get(SLOT_HR)).toBe('role-ho');
       // `superAdminRoleId` wins for `final`: the caller resolves it by the protected flag,
       // which is more reliable than resolving it by a name an administrator may have changed.

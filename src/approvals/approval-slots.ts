@@ -52,10 +52,11 @@ export const SLOT_FINAL = 'final';
  * whose administrator renamed a role should still be creatable.
  */
 export const DEFAULT_SLOT_ROLE_NAMES: Record<string, string> = {
-  /** The client's "Site Incharge" — the role their site administrators hold. */
-  [SLOT_FIRST_APPROVER]: 'Site Admin',
-  /** The client's "HR Office". No role is named HR; head office is where it sits. */
-  [SLOT_HR]: 'HO User',
+  /**
+   * The first level of what an employee asks for themselves (client, 2026-11-07). Was "HO User"
+   * from 2026-10-04; `first_approver` ("Site Admin") is no longer used by any default chain.
+   */
+  [SLOT_HR]: 'Operations Manager',
   /** The client's "Director", settled as Super Admin on 2026-09-13. */
   [SLOT_FINAL]: 'Super Admin',
 };

@@ -224,8 +224,7 @@ describe('CompaniesService', () => {
           // The three default slot roles, resolved by name since 2026-10-04 so a new
           // company can approve its own payroll on day one.
           findMany: jest.fn().mockResolvedValue([
-            { id: 'role-site', name: 'Site Admin' },
-            { id: 'role-ho', name: 'HO User' },
+            { id: 'role-ops', name: 'Operations Manager' },
             { id: 'role-super', name: 'Super Admin' },
           ]),
         },
@@ -278,8 +277,7 @@ describe('CompaniesService', () => {
         {
           superAdminRoleId: 'role-super',
           slotRoleIds: {
-            first_approver: 'role-site',
-            hr: 'role-ho',
+            hr: 'role-ops',
             final: 'role-super',
           },
         },

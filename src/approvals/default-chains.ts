@@ -1,4 +1,4 @@
-import { SLOT_FINAL, SLOT_FIRST_APPROVER, SLOT_HR } from './approval-slots';
+import { SLOT_FINAL, SLOT_HR } from './approval-slots';
 import type { ChainLevelInput } from './chains.service';
 
 /**
@@ -219,17 +219,22 @@ export const ACTION_SALARY_ADVANCE = 'salary_advance';
 export const ACTION_LABOUR_ADVANCE = 'labour_advance';
 
 /**
- * Employer → HR → Director, the shape Note 2 describes.
+ * What an employee asks for themselves — leave, a claim, a loan, a salary advance, a punch outside
+ * the rules — goes to the Operations Manager, then the Director (client, 2026-11-07).
  *
- * Labels are set explicitly rather than left to the slot-key fallback because these
- * are the words the client used, and "Site / Employer" reads better on a queue row
- * than "First approver".
+ * Work a department enters itself (an attendance correction, a labour advance, a fuel recovery,
+ * payroll) skips its own department and takes the Director alone: the person who would approve it
+ * at the first level is the person who entered it. Those chains use
+ * `DEFAULT_DIRECTOR_FINAL_LEVELS`.
+ *
+ * The first level is the `hr` slot, mapped by default to the Operations Manager role
+ * (`DEFAULT_SLOT_ROLE_NAMES`). It replaced Employer → HR → Director (Note 2) for attendance and the
+ * single Head Office level the money flows had since 2026-10-20.
  */
-export const DEFAULT_ATTENDANCE_EXCEPTION_LEVELS: ChainLevelInput[] = [
-  { position: 1, slotKey: SLOT_FIRST_APPROVER, label: 'Site / Employer' },
-  { position: 2, slotKey: SLOT_HR, label: 'HR' },
+export const DEFAULT_SELF_SERVICE_LEVELS: ChainLevelInput[] = [
+  { position: 1, slotKey: SLOT_HR, label: 'Operations Manager' },
   {
-    position: 3,
+    position: 2,
     slotKey: SLOT_FINAL,
     label: 'Director',
     isFinalAuthority: true,
@@ -281,16 +286,6 @@ export const DEFAULT_DIRECTOR_FINAL_LEVELS: ChainLevelInput[] = [
   },
 ];
 
-/** One Head Office level — what the five 2026-10-20 flows had before they joined the spine. */
-export const DEFAULT_HEAD_OFFICE_LEVELS: ChainLevelInput[] = [
-  {
-    position: 1,
-    slotKey: SLOT_HR,
-    label: 'Head Office',
-    isFinalAuthority: true,
-  },
-];
-
 /**
  * The action types seeded with the director-only chain above.
  *
@@ -332,16 +327,18 @@ export const DIRECTOR_FINAL_SEEDED_ACTIONS: string[] = [
  * once.
  */
 export const DEFAULT_COMPANY_CHAINS: [string, ChainLevelInput[]][] = [
-  [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+  // 2026-11-07: what an employee asks for themselves → Operations Manager → Director; what a
+  // department enters itself → Director alone. See `DEFAULT_SELF_SERVICE_LEVELS`.
+  [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_SELF_SERVICE_LEVELS],
   // 016 FR-012: the manual correction, same three-level shape as the exception it replaced as the
   // spine's first consumer. A distinct action type — see the constant's comment for why reusing
   // the exception key would have been wrong.
-  [ACTION_ATTENDANCE_CORRECTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+  [ACTION_ATTENDANCE_CORRECTION, DEFAULT_DIRECTOR_FINAL_LEVELS],
   [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
   // 020 FR-006: recovering fuel from an operator's salary. The same Employer → HR → Director shape
   // as a correction — it is not one of the director-final actions the client confirmed on
   // 2026-10-02, so it ends at the Director as a third level rather than as a one-level gate.
-  [ACTION_OPERATOR_FUEL_RECOVERY, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+  [ACTION_OPERATOR_FUEL_RECOVERY, DEFAULT_DIRECTOR_FINAL_LEVELS],
   // 018 FR-009: certifying a subcontractor's RA bill. One Director level by default — the minimum
   // gate that makes "editing a certified bill sends it round again" mean anything. Listed here
   // rather than added to `DIRECTOR_FINAL_SEEDED_ACTIONS`, because that list carries a policy claim
@@ -362,11 +359,11 @@ export const DEFAULT_COMPANY_CHAINS: [string, ChainLevelInput[]][] = [
   [ACTION_DWR, DEFAULT_DIRECTOR_FINAL_LEVELS],
   // 2026-10-20: the HR and labour money flows, one Head Office level each — see the constants.
   // Migration `20261020120000_hr_money_approval_chains` installs them in existing companies.
-  [ACTION_LEAVE_APPLICATION, DEFAULT_HEAD_OFFICE_LEVELS],
-  [ACTION_REIMBURSEMENT_CLAIM, DEFAULT_HEAD_OFFICE_LEVELS],
-  [ACTION_EMPLOYEE_LOAN, DEFAULT_HEAD_OFFICE_LEVELS],
-  [ACTION_SALARY_ADVANCE, DEFAULT_HEAD_OFFICE_LEVELS],
-  [ACTION_LABOUR_ADVANCE, DEFAULT_HEAD_OFFICE_LEVELS],
+  [ACTION_LEAVE_APPLICATION, DEFAULT_SELF_SERVICE_LEVELS],
+  [ACTION_REIMBURSEMENT_CLAIM, DEFAULT_SELF_SERVICE_LEVELS],
+  [ACTION_EMPLOYEE_LOAN, DEFAULT_SELF_SERVICE_LEVELS],
+  [ACTION_SALARY_ADVANCE, DEFAULT_SELF_SERVICE_LEVELS],
+  [ACTION_LABOUR_ADVANCE, DEFAULT_DIRECTOR_FINAL_LEVELS],
   // FR-018's remaining action types, each a director-only chain (T048). Seeded even where no module
   // submits into them yet: without the chain, feature 017's first work order would be refused as a
   // configuration fault in every company at once, and the remedy would be a settings visit per
