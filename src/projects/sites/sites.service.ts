@@ -42,6 +42,8 @@ export interface SiteListPage {
  * trigonometry. */
 export interface SiteGeofence {
   siteId: string;
+  /** For telling the employee and HR which site a punch was matched to (058). */
+  name: string;
   latitude: number;
   longitude: number;
   geofenceRadiusMeters: number;
@@ -103,14 +105,32 @@ export class SitesService {
   async listForCompany(
     ctx: RlsContext,
     companyId: string,
-  ): Promise<{ id: string; name: string }[]> {
-    return withRlsContext(this.prisma, ctx, (tx) =>
+  ): Promise<
+    {
+      id: string;
+      name: string;
+      projectId: string | null;
+      projectName: string | null;
+    }[]
+  > {
+    const sites = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.site.findMany({
         where: { companyId },
-        select: { id: true, name: true },
+        // 058: each site's project, so a staff assignment can offer "all sites of a project" to
+        // an HR user who cannot open the Projects module.
+        select: {
+          id: true,
+          name: true,
+          projectId: true,
+          project: { select: { name: true } },
+        },
         orderBy: { name: 'asc' },
       }),
     );
+    return sites.map(({ project, ...site }) => ({
+      ...site,
+      projectName: project?.name ?? null,
+    }));
   }
 
   /** The geofence a punch at this site is validated against. */
@@ -120,6 +140,7 @@ export class SitesService {
         where: { id: siteId },
         select: {
           id: true,
+          name: true,
           latitude: true,
           longitude: true,
           geofenceRadiusMeters: true,
@@ -132,11 +153,152 @@ export class SitesService {
     }
     return {
       siteId: site.id,
+      name: site.name,
       latitude: site.latitude.toNumber(),
       longitude: site.longitude.toNumber(),
       geofenceRadiusMeters: site.geofenceRadiusMeters,
       isActive: site.status === SiteStatus.active,
     };
+  }
+
+  /**
+   * The fences a staff punch may be matched to (058 FR-007): the assignment's sites plus every site
+   * of its projects — **active ones only**, de-duplicated. A project is resolved here, at punch
+   * time, so a site added to it later is covered without touching any assignment.
+   *
+   * Inactive sites are left out rather than reported: a punch at a closed site must not count, and
+   * an assignment whose every site is closed returns `[]`, which the caller refuses with the same
+   * "no longer in service" it always gave.
+   */
+  async geofencesFor(
+    ctx: RlsContext,
+    targets: { siteIds: string[]; projectIds: string[] },
+  ): Promise<SiteGeofence[]> {
+    if (targets.siteIds.length === 0 && targets.projectIds.length === 0) {
+      return [];
+    }
+    const sites = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.site.findMany({
+        where: {
+          status: SiteStatus.active,
+          OR: [
+            ...(targets.siteIds.length > 0
+              ? [{ id: { in: targets.siteIds } }]
+              : []),
+            ...(targets.projectIds.length > 0
+              ? [{ projectId: { in: targets.projectIds } }]
+              : []),
+          ],
+        },
+        select: {
+          id: true,
+          name: true,
+          latitude: true,
+          longitude: true,
+          geofenceRadiusMeters: true,
+        },
+        orderBy: { name: 'asc' },
+      }),
+    );
+    return sites.map((site) => ({
+      siteId: site.id,
+      name: site.name,
+      latitude: site.latitude.toNumber(),
+      longitude: site.longitude.toNumber(),
+      geofenceRadiusMeters: site.geofenceRadiusMeters,
+      isActive: true,
+    }));
+  }
+
+  /** Site names by id, for showing which site a punch was made at (058 FR-011). Missing ids are absent. */
+  async namesFor(
+    ctx: RlsContext,
+    siteIds: readonly string[],
+  ): Promise<Map<string, string>> {
+    const ids = [...new Set(siteIds)];
+    if (ids.length === 0) return new Map();
+    const sites = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.site.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true },
+      }),
+    );
+    return new Map(sites.map((site) => [site.id, site.name]));
+  }
+
+  /** Project names by id, for showing what a staff assignment covers (058). Missing ids are absent. */
+  async projectNamesFor(
+    ctx: RlsContext,
+    projectIds: readonly string[],
+  ): Promise<Map<string, string>> {
+    const ids = [...new Set(projectIds)];
+    if (ids.length === 0) return new Map();
+    const projects = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.project.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true },
+      }),
+    );
+    return new Map(projects.map((project) => [project.id, project.name]));
+  }
+
+  /**
+   * Checks that every site and project an assignment names belongs to the employee's company
+   * (058 FR-013), and names them for the response.
+   *
+   * 404 for any that does not — including one RLS hides, which is what a site of the other company
+   * looks like to a single-company caller. The projects with no active site come back for the
+   * caller's warning: the assignment is still saved, because a site may be added to the project
+   * next.
+   */
+  async assertTargetsInCompany(
+    ctx: RlsContext,
+    companyId: string,
+    targets: { siteIds: string[]; projectIds: string[] },
+  ): Promise<{
+    siteNames: Map<string, string>;
+    projectNames: Map<string, string>;
+    projectsWithoutActiveSite: string[];
+  }> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const sites = await tx.site.findMany({
+        where: { id: { in: targets.siteIds }, companyId },
+        select: { id: true, name: true },
+      });
+      const projects = await tx.project.findMany({
+        where: { id: { in: targets.projectIds }, companyId },
+        select: {
+          id: true,
+          name: true,
+          sites: {
+            where: { status: SiteStatus.active },
+            select: { id: true },
+            take: 1,
+          },
+        },
+      });
+      const missingSite = targets.siteIds.find(
+        (id) => !sites.some((site) => site.id === id),
+      );
+      if (missingSite) {
+        throw new NotFoundException(`Site ${missingSite} not found`);
+      }
+      const missingProject = targets.projectIds.find(
+        (id) => !projects.some((project) => project.id === id),
+      );
+      if (missingProject) {
+        throw new NotFoundException(`Project ${missingProject} not found`);
+      }
+      return {
+        siteNames: new Map(sites.map((site) => [site.id, site.name])),
+        projectNames: new Map(
+          projects.map((project) => [project.id, project.name]),
+        ),
+        projectsWithoutActiveSite: projects
+          .filter((project) => project.sites.length === 0)
+          .map((project) => project.id),
+      };
+    });
   }
 
   /** Day-of-week this site treats as Weekly Off, 0 = Sunday (research.md §6); null when the

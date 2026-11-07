@@ -753,7 +753,8 @@ describe('Settings module (e2e)', () => {
       await http()
         .delete(`/settings/departments/${theirs.id}`)
         .set(auth(scopedToken))
-        .expect(404);
+        // Deleting is Super Admin only (2026-11-07), so this is refused before any lookup.
+        .expect(403);
 
       const unchanged = await sys.department.findUniqueOrThrow({
         where: { id: theirs.id },
@@ -1028,7 +1029,8 @@ describe('Settings module (e2e)', () => {
       await http()
         .delete(`/settings/roles/${roleA}`)
         .set(auth(tokenB))
-        .expect(404);
+        // Deleting is Super Admin only (2026-11-07), so this is refused before any lookup.
+        .expect(403);
     });
 
     it('shows a group admin with no company selected every company’s roles, each named', async () => {

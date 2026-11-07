@@ -33,6 +33,7 @@ import { callerFrom } from '../../hr/caller-context';
 import { EmployeesService } from '../../hr/employees/employees.service';
 import { WithdrawResignationDto } from './dto/resignation.dto';
 import { ResignationService } from './resignation.service';
+import { OwnRecords } from '../../common/own-records/own-records.decorator';
 
 /** The default notice an employee's own resignation starts from; HR settles the real one. */
 const SELF_NOTICE_DAYS = 30;
@@ -65,6 +66,8 @@ export class SubmitMyResignationDto {
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @SelfService()
+// 058: the caller's own records, read in their home company.
+@OwnRecords()
 @Controller('my/resignation')
 export class MyResignationController {
   constructor(

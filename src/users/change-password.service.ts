@@ -5,7 +5,10 @@ import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { PasswordService } from '../auth/password.service';
 import { RefreshTokenService } from '../auth/refresh-token.service';
-import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
+import {
+  ownRecordsContextFor,
+  withRlsContext,
+} from '../common/prisma/rls-context';
 import { EmailService } from '../shared/email/email.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 
@@ -66,7 +69,7 @@ export class ChangePasswordService {
 
     const updated = await withRlsContext(
       this.prisma,
-      rlsContextFor(caller),
+      ownRecordsContextFor(caller),
       (tx) =>
         tx.user.update({
           data: {
@@ -89,7 +92,8 @@ export class ChangePasswordService {
 
     await this.auditLog.recordAuthEvent(AuditEntityType.PASSWORD_CHANGED, {
       accountId: caller.id,
-      companyId: caller.companyId,
+      // 058: the account's own company, not the one an all-companies user is working in.
+      companyId: caller.homeCompanyId ?? caller.companyId,
       ipAddress,
       changes: { otherSessionsSignedOut: true },
     });
@@ -97,7 +101,7 @@ export class ChangePasswordService {
     try {
       await this.email.sendPasswordChangedEmail({
         to: caller.email,
-        companyId: caller.companyId,
+        companyId: caller.homeCompanyId ?? caller.companyId,
         changedAt: updated.updatedAt,
         via: 'self',
       });
@@ -117,6 +121,8 @@ export class ChangePasswordService {
       roleNames: caller.roleNames,
       roleIds: caller.roleIds,
       homeModule: caller.homeModule,
+      homeCompanyId: caller.homeCompanyId,
+      multiCompany: caller.multiCompany,
     };
   }
 }

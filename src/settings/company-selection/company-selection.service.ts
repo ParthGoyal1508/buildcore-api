@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { ForbiddenException, Injectable } from '@nestjs/common';
-import { Permission } from '@prisma/client';
+import { CompanyStatus, Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -64,8 +64,11 @@ export class CompanySelectionService {
    */
   async selectableFor(caller: AuthenticatedUser): Promise<SelectableCompany[]> {
     const selected = await this.resolve(caller);
+    const crossCompany = caller.permissions.includes(
+      Permission.CROSS_COMPANY_ACCESS,
+    );
 
-    if (!caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)) {
+    if (!crossCompany && !caller.multiCompany) {
       if (!caller.companyId) return [];
       const own = await withRlsContext(
         this.prisma,
@@ -94,6 +97,9 @@ export class CompanySelectionService {
       { isSuperAdmin: true },
       (tx) =>
         tx.company.findMany({
+          // 058: an all-companies user chooses among the companies still in business. A Super
+          // Admin keeps seeing every company, closed ones included, as before.
+          where: crossCompany ? {} : { status: CompanyStatus.active },
           select: { id: true, name: true, logoRef: true },
           orderBy: { name: 'asc' },
         }),
@@ -101,6 +107,7 @@ export class CompanySelectionService {
     return companies.map((company) => ({
       id: company.id,
       name: company.name,
+      // For an all-companies user `companyId` is already the working company (JwtStrategy).
       selected: company.id === (selected ?? caller.companyId),
       // The reference itself is never sent: it is a storage path, and the only thing a
       // caller can do with it is ask this API for the bytes, which it does by company id.
@@ -185,10 +192,14 @@ export class CompanySelectionService {
     id: string;
     companyId: string | null;
     permissions: Permission[];
+    multiCompany?: boolean;
   }): Promise<string | null> {
     // A single-company caller has nothing to select: their own company always wins, so there is
     // no point reading the row at all.
-    if (!caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)) {
+    const crossCompany = caller.permissions.includes(
+      Permission.CROSS_COMPANY_ACCESS,
+    );
+    if (!crossCompany && !caller.multiCompany) {
       return null;
     }
 
@@ -204,7 +215,7 @@ export class CompanySelectionService {
         const company = row
           ? await tx.company.findUnique({
               where: { id: row.companyId },
-              select: { id: true },
+              select: { id: true, status: true },
             })
           : null;
         return { row, company };
@@ -212,12 +223,43 @@ export class CompanySelectionService {
     );
     if (!row) return null;
 
-    if (!company) {
+    // 058: an all-companies user is never left working in a company that has been closed — the
+    // selection is dropped and they fall back to their home company (JwtStrategy).
+    if (
+      !company ||
+      (!crossCompany && company.status !== CompanyStatus.active)
+    ) {
       await this.clear(caller.id);
       return null;
     }
 
     return row.companyId;
+  }
+
+  /**
+   * The company an all-companies user works in on this request (058): their selection, else their
+   * home company — and, when the home company has itself been closed, the first active company,
+   * so the account is never left scoped to a company nobody can work in.
+   */
+  async workingCompanyFor(caller: {
+    companyId: string | null;
+    selected: string | null;
+  }): Promise<string | null> {
+    if (caller.selected) return caller.selected;
+    const companies = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findMany({
+          where: { status: CompanyStatus.active },
+          select: { id: true },
+          orderBy: { name: 'asc' },
+        }),
+    );
+    if (companies.some((company) => company.id === caller.companyId)) {
+      return caller.companyId;
+    }
+    return companies[0]?.id ?? caller.companyId;
   }
 
   /** Removes a stale selection. */

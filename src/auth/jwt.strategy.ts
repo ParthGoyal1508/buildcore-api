@@ -45,7 +45,21 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // Re-validated on every request rather than trusted because it is stored: the spec's own
     // edge case is cross-company access being revoked while the other company is selected, and
     // a stored selection honoured at read time is how that becomes a cross-tenant read.
-    user.selectedCompanyId = await this.companySelection.resolve(user);
+    const selected = await this.companySelection.resolve(user);
+    if (user.multiCompany) {
+      // 058: an all-companies user works in one company at a time — the one they selected, else
+      // their home company. `companyId` *becomes* that company for this request, so every reader
+      // of it (some 60 files) and every `rlsContextFor` follows the selection through the
+      // ordinary single-company branch: no Super Admin bypass, ever. Their own records are read
+      // from `homeCompanyId` instead (`@OwnRecords()`, `ownRecordsContextFor`).
+      user.companyId = await this.companySelection.workingCompanyFor({
+        companyId: user.homeCompanyId,
+        selected,
+      });
+      user.selectedCompanyId = null;
+    } else {
+      user.selectedCompanyId = selected;
+    }
     user.sessionId = payload.sid ?? null;
     return user;
   }

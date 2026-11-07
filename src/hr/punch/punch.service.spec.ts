@@ -53,6 +53,7 @@ const FRAMES = [0, 1, 2].map(() => Buffer.from(JPEG_BASE64, 'base64'));
 
 const SITE = {
   siteId: 'site-1',
+  name: 'Site One',
   latitude: 19.076,
   longitude: 72.8777,
   geofenceRadiusMeters: 200,
@@ -102,7 +103,11 @@ describe('PunchService', () => {
        * ships and the fallback FR-016 requires. Tests that do not set it therefore keep
        * exercising the site fence.
        */
-      assignment?: { siteId: string | null; isMobile: boolean };
+      assignment?: {
+        isMobile: boolean;
+        siteIds: string[];
+        projectIds: string[];
+      };
       /** 057: a liveness check that fails, as the liveness double reports it. */
       livenessFailure?: LivenessFailure;
       /**
@@ -168,7 +173,11 @@ describe('PunchService', () => {
     // were called* — FR-013's requirement is about ordering, not about the thrown status.
     const refusals = { record: jest.fn().mockResolvedValue(undefined) };
     // Hoisted so a test can close the site: `isActive` is the fact 008 stored and nothing read.
-    const sites = { getGeofence: jest.fn().mockResolvedValue(SITE) };
+    // 058: an assignment's sites come from `geofencesFor`; the employee's own from `getGeofence`.
+    const sites = {
+      getGeofence: jest.fn().mockResolvedValue(SITE),
+      geofencesFor: jest.fn().mockResolvedValue([SITE]),
+    };
     const storage = { put: jest.fn().mockResolvedValue('punch/ref-1') };
     // 057: the challenge is spent and the frames judged; the verdict follows the fake face, plus an
     // optional failed liveness check. The checks themselves are covered in liveness.service.spec.
@@ -434,7 +443,7 @@ describe('PunchService', () => {
 
       it('does not refuse a mobile employee for being outside the fence', async () => {
         const { service } = build({
-          assignment: { siteId: null, isMobile: true },
+          assignment: { isMobile: true, siteIds: [], projectIds: [] },
         });
         const result = await service.submitPunch(
           caller,
@@ -449,7 +458,7 @@ describe('PunchService', () => {
         // **who** they are — and the one-line implementation of "exempt from validation" is the
         // version that gets this wrong, which is the whole reason this test exists.
         const { service } = build({
-          assignment: { siteId: null, isMobile: true },
+          assignment: { isMobile: true, siteIds: [], projectIds: [] },
         });
         biometrics.next = Float32Array.from(
           { length: FACE_DESCRIPTOR_LENGTH },
@@ -459,6 +468,82 @@ describe('PunchService', () => {
 
         expect(result.geofenceResult).toBe(GeofenceResult.in_range);
         expect(result.faceMatchResult).toBe(FaceMatchResult.exception);
+      });
+
+      /**
+       * 058: an assignment covering several sites. SITE_B is ~2.2 km north of SITE, well clear of
+       * its fence, and the employee's own site (SITE) is not among the assignment's.
+       */
+      describe('several sites (058)', () => {
+        const SITE_B = {
+          ...SITE,
+          siteId: 'site-b',
+          name: 'Site B',
+          latitude: SITE.latitude + 0.02,
+        };
+        const assignment = {
+          isMobile: false,
+          siteIds: ['site-1', 'site-b'],
+          projectIds: [],
+        };
+
+        it('accepts a punch at the second site and records it there', async () => {
+          const { service, created, sites } = build({ assignment });
+          sites.geofencesFor.mockResolvedValue([SITE, SITE_B]);
+          const result = await service.submitPunch(
+            caller,
+            punchDto({ latitude: SITE_B.latitude }),
+          );
+
+          expect(sites.geofencesFor).toHaveBeenCalledWith(
+            expect.anything(),
+            assignment,
+          );
+          expect(result.geofenceResult).toBe(GeofenceResult.in_range);
+          expect(result.site).toEqual({ id: 'site-b', name: 'Site B' });
+          expect(created[0]).toMatchObject({ siteId: 'site-b' });
+        });
+
+        it('flags a punch outside every site, recorded against the nearest', async () => {
+          const { service, created, sites } = build({ assignment });
+          sites.geofencesFor.mockResolvedValue([SITE, SITE_B]);
+          // ~1.3 km north of SITE_B, ~3.5 km from SITE.
+          const result = await service.submitPunch(
+            caller,
+            punchDto({ latitude: SITE_B.latitude + 0.012 }),
+          );
+
+          expect(result.geofenceResult).toBe(GeofenceResult.exception);
+          expect(created[0]).toMatchObject({ siteId: 'site-b' });
+        });
+
+        it('refuses when every covered site is out of service', async () => {
+          const { service, sites, created } = build({ assignment });
+          sites.geofencesFor.mockResolvedValue([]);
+          await expect(service.submitPunch(caller, punchDto())).rejects.toThrow(
+            'no longer in service',
+          );
+          expect(created).toHaveLength(0);
+        });
+
+        it("records a punch without an assignment against the employee's own site", async () => {
+          const { service, created } = build();
+          const result = await service.submitPunch(caller, punchDto());
+          expect(result.site).toEqual({ id: 'site-1', name: 'Site One' });
+          expect(created[0]).toMatchObject({ siteId: 'site-1' });
+        });
+
+        it('records a mobile employee against no site', async () => {
+          const { service, created } = build({
+            assignment: { isMobile: true, siteIds: [], projectIds: [] },
+          });
+          const result = await service.submitPunch(
+            caller,
+            punchDto({ latitude: SITE.latitude + 0.05 }),
+          );
+          expect(result.site).toBeNull();
+          expect(created[0]).toMatchObject({ siteId: null });
+        });
       });
     });
 

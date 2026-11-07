@@ -41,6 +41,7 @@ import {
   livenessMultipartBody,
   UploadedFrame,
 } from '../../common/uploads/liveness-frames';
+import { OwnRecords } from '../../common/own-records/own-records.decorator';
 
 @ApiTags('My Workspace')
 @ApiBearerAuth()
@@ -51,6 +52,8 @@ import {
 // theirs. Declared rather than left as an absence, so the guard can refuse a route
 // that says nothing at all.
 @SelfService()
+// 058: the caller's own records, read in their home company.
+@OwnRecords()
 @Controller('my/punch')
 export class PunchController {
   constructor(

@@ -281,13 +281,14 @@ describe('EmployeeLetterSource', () => {
   it('names a transfer’s destination and where they came from', async () => {
     const { source } = harness({
       assignments: [
+        // 058: an assignment covers targets; the letter names the first site.
         {
-          siteId: 'site-b',
+          targets: [{ siteId: 'site-b', projectId: null }],
           isMobile: false,
           effectiveFrom: new Date('2026-10-05'),
         },
         {
-          siteId: 'site-a',
+          targets: [{ siteId: 'site-a', projectId: null }],
           isMobile: false,
           effectiveFrom: new Date('2026-01-01'),
         },

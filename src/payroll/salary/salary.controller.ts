@@ -15,6 +15,7 @@ import { SalaryPdfService } from './salary-pdf.service';
 import { SalaryService } from './salary.service';
 import { SelfService } from '../../common/decorators/route-access.decorator';
 import { contentDispositionFor } from '../../common/storage/file-type';
+import { OwnRecords } from '../../common/own-records/own-records.decorator';
 
 /**
  * The employee's own payslips (US5).
@@ -32,6 +33,8 @@ import { contentDispositionFor } from '../../common/storage/file-type';
 // theirs. Declared rather than left as an absence, so the guard can refuse a route
 // that says nothing at all.
 @SelfService()
+// 058: the caller's own records, read in their home company.
+@OwnRecords()
 @Controller('my/salary')
 export class SalaryController {
   constructor(

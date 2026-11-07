@@ -41,7 +41,11 @@ describe('PunchRefusalsService', () => {
       },
     };
     return {
-      service: new PunchRefusalsService(prisma as never, storage as never),
+      service: new PunchRefusalsService(
+        prisma as never,
+        storage as never,
+        { namesFor: jest.fn().mockResolvedValue(new Map()) } as never,
+      ),
       writes,
       deleted,
     };

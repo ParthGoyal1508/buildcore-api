@@ -34,6 +34,7 @@ import { LetterKindFieldsService } from './letter-kind-fields.service';
 import { UpsertLetterKindFieldDto } from './dto/letter-kind-field.dto';
 import { resolveCompanyId } from '../company-scope';
 import { LETTER_READ_PERMISSIONS } from '../../letters/letter-permissions';
+import { EditorMayDelete } from '../../common/record-delete/editor-may-delete.decorator';
 
 /**
  * Letter kinds as data (017 US5, FR-011, FR-022).
@@ -201,6 +202,7 @@ export class LetterKindsController {
     );
   }
 
+  @EditorMayDelete()
   @Delete(':id/fields/:token')
   @HttpCode(204)
   @ApiOperation({

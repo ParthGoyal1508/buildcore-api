@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Put, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Ip,
+  Param,
+  Put,
+  UseGuards,
+} from '@nestjs/common';
 import { Permission } from '@prisma/client';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
@@ -8,7 +16,10 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
-import { AssignLocationDto } from './dto/location-assignment.dto';
+import {
+  AssignLocationDto,
+  assignInputFrom,
+} from './dto/location-assignment.dto';
 import { LocationAssignmentsService } from './location-assignments.service';
 
 /**
@@ -31,9 +42,9 @@ export class LocationAssignmentsController {
     summary:
       "Which location this employee's punches validate against, and its history",
     description:
-      'Newest effective date first. An **empty list is not a misconfiguration** — it means the ' +
-      "employee is validated against their own site's geofence, which is the behaviour every " +
-      'employee has today (FR-016).',
+      'Newest effective date first, each with the sites and projects it covers (`targets`, ' +
+      'named). An **empty list is not a misconfiguration** — it means the employee is validated ' +
+      "against their own site's geofence (FR-016).",
   })
   async history(
     @UserEntity() caller: AuthenticatedUser,
@@ -47,18 +58,23 @@ export class LocationAssignmentsController {
     summary: 'Assign a location, from an effective date',
     description:
       '**Appends.** A prior assignment is never altered, so a transfer stays explicable months ' +
-      'later with who decided it and when it took effect.',
+      'later with who decided it and when it took effect.\n\n' +
+      '058: name any number of `siteIds` and `projectIds` (a project covers every active site of ' +
+      'it at punch time), or `isMobile`. 400 `ASSIGNMENT_EMPTY` / `ASSIGNMENT_MOBILE_WITH_TARGETS`; ' +
+      "404 for a site or project outside the employee's company. A project with no active site " +
+      "is saved with `warnings: ['PROJECT_HAS_NO_ACTIVE_SITE']`.",
   })
   async assign(
     @UserEntity() caller: AuthenticatedUser,
     @Param('employeeId') employeeId: string,
     @Body() dto: AssignLocationDto,
+    @Ip() ipAddress: string,
   ) {
     return this.assignments.assign(
       rlsContextFor(caller),
       employeeId,
-      dto,
-      caller.id,
+      assignInputFrom(dto),
+      { userId: caller.id, ipAddress },
     );
   }
 }

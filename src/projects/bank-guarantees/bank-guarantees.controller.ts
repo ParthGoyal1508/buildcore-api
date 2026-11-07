@@ -39,6 +39,7 @@ import {
   UpdateBgTenderDto,
   UploadBankGuaranteeDocumentDto,
 } from './dto/bank-guarantee.dto';
+import { EditorMayDelete } from '../../common/record-delete/editor-may-delete.decorator';
 
 /**
  * The Bank Guarantees register (037, specs/037-bank-guarantees/spec.md).
@@ -127,6 +128,7 @@ export class BankGuaranteesController {
     res.send(data);
   }
 
+  @EditorMayDelete()
   @Delete('documents/:documentId')
   @ApiOperation({ summary: 'Remove a guarantee document' })
   removeDocument(

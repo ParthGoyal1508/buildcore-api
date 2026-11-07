@@ -26,7 +26,11 @@ export class SupervisorSiteController {
   constructor(private readonly supervisorSites: SupervisorSiteService) {}
 
   @Get('my-sites')
-  @RequirePermissions(Permission.DAILY_WORKER_REGISTRY)
+  // 058 US4: a site supervisor holding only the narrow permission needs their own sites too.
+  @RequirePermissions(
+    Permission.DAILY_WORKER_REGISTRY,
+    Permission.LABOUR_ATTENDANCE,
+  )
   @ApiOperation({
     summary: 'The sites the caller may register labour and mark attendance at',
   })

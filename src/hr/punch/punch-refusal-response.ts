@@ -50,6 +50,11 @@ export interface PunchRefusalDetail {
   accuracyMaxMeters?: number;
   /** For a liveness refusal (057): which check failed, and on which frame. */
   liveness?: LivenessFailure;
+  /**
+   * The covered site the distance is measured from (058): the nearest of the employee's sites.
+   * Named so an employee with several sites is told which one they are far from.
+   */
+  siteName?: string;
 }
 
 /** "850 m" under a kilometre (rounded to 10 m — finer is false precision for GPS), "2.4 km" above. */
@@ -111,7 +116,7 @@ export function unlocatableMessage(detail: PunchRefusalDetail): string {
  */
 const PUNCH_REFUSAL_MESSAGES = {
   [PunchRefusalReason.outside_geofence]: (d: PunchRefusalDetail) =>
-    outsideFenceMessage(d, 'your assigned site'),
+    outsideFenceMessage(d, d.siteName ?? 'your assigned site'),
   [PunchRefusalReason.unlocatable]: unlocatableMessage,
   [PunchRefusalReason.face_mismatch]: () =>
     'The face in this photo does not match your enrolled face, so the punch was not recorded. ' +

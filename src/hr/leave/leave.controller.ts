@@ -28,6 +28,7 @@ import {
 } from './dto/leave-application.dto';
 import { LeaveService } from './leave.service';
 import { SelfService } from '../../common/decorators/route-access.decorator';
+import { OwnRecords } from '../../common/own-records/own-records.decorator';
 
 /**
  * The employee's own leave surface (US4).
@@ -45,6 +46,8 @@ import { SelfService } from '../../common/decorators/route-access.decorator';
 // theirs. Declared rather than left as an absence, so the guard can refuse a route
 // that says nothing at all.
 @SelfService()
+// 058: the caller's own records, read in their home company.
+@OwnRecords()
 @Controller('my/leave')
 export class LeaveController {
   constructor(private readonly leave: LeaveService) {}

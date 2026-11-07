@@ -79,7 +79,7 @@ export class SitesController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Query('companyId') companyId?: string,
-  ): Promise<{ id: string; name: string }[]> {
+  ) {
     // 036 B2/B3: the *selected* company, through the shared helper. `user.companyId ?? companyId`
     // read the account's home company first, so a cross-company caller who had switched to
     // another company was shown the home company's sites in every picker that calls this (the

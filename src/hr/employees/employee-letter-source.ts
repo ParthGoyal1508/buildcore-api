@@ -149,6 +149,7 @@ export class EmployeeLetterSource implements OnModuleInit {
         where: { employeeId },
         orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
         take: 2,
+        include: { targets: { select: { siteId: true, projectId: true } } },
       });
       const exit = await tx.exitRecord.findFirst({
         where: { employeeId },
@@ -237,12 +238,31 @@ export class EmployeeLetterSource implements OnModuleInit {
       };
     }
 
+    // 058: an assignment covers a set of sites and projects. A transfer letter names one place, so
+    // it takes the first site named, else the first project.
+    const placeOfAssignment = async (
+      assignment: (typeof assignments)[number],
+    ) => {
+      if (assignment.isMobile) return { siteName: 'Mobile', projectName: '' };
+      const site = assignment.targets.find((t) => t.siteId)?.siteId ?? null;
+      if (site) return placeOf(site);
+      const projectId =
+        assignment.targets.find((t) => t.projectId)?.projectId ?? null;
+      const project = projectId
+        ? await this.projects
+            .getProjectIdentityById(projectId, ctx)
+            .catch(() => null)
+        : null;
+      return { siteName: '', projectName: project?.name ?? '' };
+    };
     const [latest, before] = assignments;
     if (latest) {
-      const to = await placeOf(latest.siteId);
-      const from = await placeOf(before ? before.siteId : employee.siteId);
+      const to = await placeOfAssignment(latest);
+      const from = before
+        ? await placeOfAssignment(before)
+        : await placeOf(employee.siteId);
       record.transfer = {
-        toSite: latest.isMobile && !latest.siteId ? 'Mobile' : to.siteName,
+        toSite: to.siteName,
         toProject: to.projectName,
         effectiveFrom: latest.effectiveFrom,
         fromProject: from.projectName || from.siteName,

@@ -44,7 +44,10 @@ function serviceWith(
   const service = new AttendanceHistoryService(
     prisma as never,
     { requireByUserId: async () => ({}) } as never,
-    { getWeeklyOffDay: async () => 0 } as never,
+    {
+      getWeeklyOffDay: async () => 0,
+      namesFor: async () => new Map(),
+    } as never,
     { getHolidayCalendar: async () => [] } as never,
     {
       getApprovedLeaveDates: async () => new Set<string>(),

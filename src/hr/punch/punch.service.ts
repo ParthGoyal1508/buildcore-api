@@ -46,7 +46,7 @@ import { EmployeeDocumentsService } from '../employees/documents/employee-docume
 import { EmployeesService } from '../employees/employees.service';
 import { SubmitPunchDto } from './dto/punch.dto';
 import { LocationAssignmentsService } from '../location-assignments/location-assignments.service';
-import { checkGeofence } from './geofence.util';
+import { matchSite } from './site-match';
 import { PunchRefusalsService } from './punch-refusals.service';
 import { punchRefusedException } from './punch-refusal-response';
 import { isPayrollLocked } from './payroll-lock';
@@ -70,6 +70,8 @@ export interface PunchResult {
   isOfflineSync: boolean;
   faceMatchResult: FaceMatchResult;
   geofenceResult: GeofenceResult;
+  /** The site the punch was recorded against (058); null for a mobile employee. */
+  site: { id: string; name: string } | null;
 }
 
 /**
@@ -319,28 +321,34 @@ export class PunchService {
     // The face is computed from the photo as uploaded rather than from the compressed copy —
     // the matcher downscales on its own, and waiting for the re-encode only delayed it. Every
     // check below still runs in the order it always has; only the waiting overlaps.
-    const [compressed, judgement, { assignment, geofence }, accuracyMax] =
+    const [compressed, judgement, { assignment, fences }, accuracyMax] =
       await Promise.all([
         this.images.compressPunchPhoto(photoBytes),
         // 057: every frame analysed once — face, head turn and anti-spoof score — on the worker.
         // A failed check is a verdict, not an error; only a malformed capture throws.
         this.liveness.judge(steps, frames),
-        // 020 FR-011, FR-016. No assignment → the employee's own site fence, exactly as
-        // before. That is every employee on the day this ships, which is why this table can
-        // be introduced with no backfill and refuse nobody.
+        // 020 FR-011, FR-016; 058. The fences this punch may be matched to:
+        //  - an assignment naming sites and projects → every active site it covers today;
+        //  - no assignment → the employee's own site, exactly as before 020;
+        //  - mobile → the employee's own site too, fetched only for its **distance**, which is
+        //    evidence worth recording, and then not allowed to refuse anything (`geofenceResult`).
+        // Inactive sites are dropped either way, so a list left empty means every place this
+        // employee may punch is out of service.
         this.assignments
           .inForceOn(caller.rls, employee.id, punchDay)
-          .then(async (assignment) => ({
-            assignment,
-            // A mobile assignment carries no site (the check constraint enforces that), so
-            // the fence still resolves from the employee's own site. It is fetched for its
-            // **distance**, which is evidence worth recording, and then not allowed to refuse
-            // anything — see `geofenceResult`.
-            geofence: await this.sites.getGeofence(
+          .then(async (assignment) => {
+            if (assignment && !assignment.isMobile) {
+              return {
+                assignment,
+                fences: await this.sites.geofencesFor(caller.rls, assignment),
+              };
+            }
+            const own = await this.sites.getGeofence(
               caller.rls,
-              assignment?.siteId ?? employee.siteId,
-            ),
-          })),
+              employee.siteId,
+            );
+            return { assignment, fences: own.isActive ? [own] : [] };
+          }),
         // 020 FR-012b. Read per request, so a Super Admin raising the threshold takes effect
         // on the next punch with no restart — which is what "configurable from the settings"
         // has to mean to be useful.
@@ -374,6 +382,28 @@ export class PunchService {
       faceMatchDistance = match.distance;
     }
 
+    // A fix worse than the company's threshold means the punch cannot be **located**, which is a
+    // different fact from being located outside the fence. Both currently produce the same
+    // `exception`; FR-013b's refusal distinguishes them, and that is why the reason is computed
+    // here rather than inferred later from the distance.
+    const unlocatable =
+      dto.accuracyMeters !== undefined && dto.accuracyMeters > accuracyMax;
+
+    // 058: matched against every covered site — the nearest one whose fence contains the punch,
+    // else the nearest one at all (the evidence a refusal records). One site behaves exactly as
+    // the single `checkGeofence` did before.
+    const siteMatch = matchSite(
+      {
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        // The allowance is only extended to a fix the company is willing to trust. Widening the
+        // fence by an accuracy that already failed the threshold would let the worst fixes buy the
+        // largest allowance, which is exactly backwards.
+        accuracyMeters: unlocatable ? undefined : dto.accuracyMeters,
+      },
+      fences,
+    );
+
     // 008 US2/AC4, closed by 025 FR-035. `SiteStatus.inactive` has been stored and editable since
     // 008 and read by nothing, so decommissioning a site did not stop attendance being recorded
     // against it — the one acceptance criterion of a P1 story that shipped unmet, and it kept a
@@ -383,31 +413,16 @@ export class PunchService {
     // Those two are *evidence about a punch that happened*; this is a punch that should not have
     // been offered at all, and recording it as an exception would leave somebody to decide later
     // whether a day at a closed site counts.
-    if (!geofence.isActive) {
+    // 058: `null` exactly when no covered site is active — every place this employee may punch
+    // is out of service.
+    if (!siteMatch) {
       throw new BadRequestException(
         'This site is no longer in service, so attendance cannot be recorded against it. ' +
           'If work is still happening here, the site has to be made active again.',
       );
     }
+    const { site: matchedFence, withinGeofence, distanceMeters } = siteMatch;
 
-    // A fix worse than the company's threshold means the punch cannot be **located**, which is a
-    // different fact from being located outside the fence. Both currently produce the same
-    // `exception`; FR-013b's refusal distinguishes them, and that is why the reason is computed
-    // here rather than inferred later from the distance.
-    const unlocatable =
-      dto.accuracyMeters !== undefined && dto.accuracyMeters > accuracyMax;
-
-    const { withinGeofence, distanceMeters } = checkGeofence(
-      {
-        latitude: dto.latitude,
-        longitude: dto.longitude,
-        // The allowance is only extended to a fix the company is willing to trust. Widening the
-        // fence by an accuracy that already failed the threshold would let the worst fixes buy the
-        // largest allowance, which is exactly backwards.
-        accuracyMeters: unlocatable ? undefined : dto.accuracyMeters,
-      },
-      geofence,
-    );
     /**
      * 020 FR-014: a mobile employee is exempt from **location** validation.
      *
@@ -424,6 +439,13 @@ export class PunchService {
       assignment?.isMobile || (withinGeofence && !unlocatable)
         ? GeofenceResult.in_range
         : GeofenceResult.exception;
+
+    // 058 FR-008, FR-009: the site this punch is recorded against. In range, the site the punch was
+    // inside; flagged while the block is off, the nearest — what the register should show beside
+    // the flag. None for a mobile employee (their fence was measured, not applied), and none for an
+    // unlocatable fix, which is not trusted to say where it was.
+    const recordedSite =
+      assignment?.isMobile || unlocatable ? null : matchedFence;
 
     const isException =
       faceMatchResult === FaceMatchResult.exception ||
@@ -488,6 +510,7 @@ export class PunchService {
         latitude: dto.latitude,
         longitude: dto.longitude,
         distanceMeters,
+        siteId: recordedSite?.siteId ?? null,
         accuracyMeters: dto.accuracyMeters ?? null,
         faceMatchDistance,
         capturedAt,
@@ -520,11 +543,12 @@ export class PunchService {
         distanceMeters: unlocatable ? undefined : distanceMeters,
         // The same fence `checkGeofence` judged against — radius plus the accuracy allowance.
         allowedMeters:
-          geofence.geofenceRadiusMeters +
+          matchedFence.geofenceRadiusMeters +
           (unlocatable ? 0 : dto.accuracyMeters ?? 0),
         accuracyMeters: dto.accuracyMeters,
         accuracyMaxMeters: accuracyMax,
         liveness: livenessFailure ?? undefined,
+        siteName: unlocatable ? undefined : matchedFence.name,
       });
     }
 
@@ -614,6 +638,7 @@ export class PunchService {
           longitude: new Prisma.Decimal(dto.longitude),
           geofenceResult,
           geofenceDistanceMeters: new Prisma.Decimal(distanceMeters.toFixed(2)),
+          siteId: recordedSite?.siteId ?? null,
           // Only a flagged punch enters the resolution queue; a clean one has
           // nothing for an admin to decide.
           exceptionResolution: isException ? ExceptionResolution.pending : null,
@@ -647,6 +672,7 @@ export class PunchService {
         faceMatchResult,
         geofenceResult,
         geofenceDistanceMeters: Number(distanceMeters.toFixed(2)),
+        siteId: recordedSite?.siteId ?? null,
       } as Prisma.InputJsonValue,
       accountId: caller.userId,
       companyId: employee.companyId,
@@ -659,7 +685,7 @@ export class PunchService {
       await this.raiseExceptionForApproval(record, employee, caller);
     }
 
-    return this.toResult(record);
+    return this.toResult(record, recordedSite?.name ?? null);
   }
 
   /**
@@ -733,7 +759,7 @@ export class PunchService {
   // be a bypass — and the whole point of this feature is that no single person can
   // resolve an exception alone.
 
-  private toResult(record: PunchRecord): PunchResult {
+  private toResult(record: PunchRecord, siteName: string | null): PunchResult {
     return {
       id: record.id,
       type: record.type,
@@ -741,6 +767,10 @@ export class PunchService {
       isOfflineSync: record.isOfflineSync,
       faceMatchResult: record.faceMatchResult,
       geofenceResult: record.geofenceResult,
+      site:
+        record.siteId && siteName
+          ? { id: record.siteId, name: siteName }
+          : null,
     };
   }
 

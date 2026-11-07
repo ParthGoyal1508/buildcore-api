@@ -26,6 +26,7 @@ import { INVITE_TOKEN_TTL_HOURS } from '../constants/account-creation.constants'
 import { TokenService } from '../invites/token.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { assertMayGrant, roleGrants } from '../../settings/roles/grant-ceiling';
+import { ALL_COMPANIES_SUPER_ADMIN_ONLY } from '../../settings/roles/roles.constants';
 import type { Grant } from '../../auth/authenticated-user';
 import { allocateUsername, isUsernameConflict } from './username';
 
@@ -135,6 +136,18 @@ export class UsersService {
       grants ?? [],
       `give a new account the ${role.name} role`,
     );
+    // 058 FR-017a: a role that works in all companies opens a second company to the new account,
+    // which only a Super Admin may do.
+    if (
+      role.allCompanies &&
+      !caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)
+    ) {
+      throw new ForbiddenException({
+        code: ALL_COMPANIES_SUPER_ADMIN_ONLY,
+        message:
+          'Only a Super Admin can give a new account a role that works in all companies.',
+      });
+    }
     // And only in their own company. Row-level security on the insert says the same; this says
     // it with a reason rather than a constraint failure.
     if (

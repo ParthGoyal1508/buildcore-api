@@ -11,6 +11,7 @@ import { PasswordService } from '../auth/password.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { UpdateUserDto } from './dto/update-user.dto';
 import {
+  ownRecordsContextFor,
   RlsContext,
   rlsContextFor,
   withRlsContext,
@@ -30,7 +31,8 @@ export class UsersService {
   ): Promise<AuthenticatedUser> {
     const updated = await withRlsContext(
       this.prisma,
-      rlsContextFor(caller),
+      // 058: the caller's own row lives in their home company, whichever they are working in.
+      ownRecordsContextFor(caller),
       (tx) =>
         tx.user.update({
           data: newUserData,
@@ -47,6 +49,8 @@ export class UsersService {
       roleNames: caller.roleNames,
       roleIds: caller.roleIds,
       homeModule: caller.homeModule,
+      homeCompanyId: caller.homeCompanyId,
+      multiCompany: caller.multiCompany,
     };
   }
 
@@ -510,6 +514,16 @@ export class UsersService {
         }),
     );
     return rows.map((r) => r.roleId);
+  }
+
+  /** Which of `roleIds` work in all companies (058) — only a Super Admin may give or take them. */
+  async allCompaniesRoleIds(roleIds: string[]): Promise<string[]> {
+    if (roleIds.length === 0) return [];
+    const roles = await this.prisma.role.findMany({
+      where: { id: { in: roleIds }, allCompanies: true },
+      select: { id: true },
+    });
+    return roles.map((role) => role.id);
   }
 
   /** Which of `roleIds` are protected (Super Admin) roles (036 C1). `Role` is global. */

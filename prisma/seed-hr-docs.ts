@@ -718,7 +718,8 @@ async function main() {
               id: k(r.key),
               companyId,
               employeeId: employee.id,
-              siteId: r.siteId,
+              // 058: the site is a target row.
+              targets: { create: [{ companyId, siteId: r.siteId }] },
               isMobile: false,
               effectiveFrom: d(r.at),
               assignedByUserId: admin.id,

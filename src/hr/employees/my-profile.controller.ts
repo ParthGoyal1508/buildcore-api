@@ -11,6 +11,7 @@ import { EmployeeDocumentsService } from './documents/employee-documents.service
 import { EmployeesService } from './employees.service';
 import { ReferenceDataService } from '../../settings/reference-data/reference-data.service';
 import { SitesService } from '../../projects/sites/sites.service';
+import { OwnRecords } from '../../common/own-records/own-records.decorator';
 
 /**
  * An employee's own record and documents (2026-10-16, My Workspace).
@@ -22,6 +23,8 @@ import { SitesService } from '../../projects/sites/sites.service';
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @SelfService()
+// 058: the caller's own records, read in their home company.
+@OwnRecords()
 @Controller('my')
 export class MyProfileController {
   constructor(

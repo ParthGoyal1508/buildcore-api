@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, PunchRefusalReason, PunchType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+import { SitesService } from '../../projects/sites/sites.service';
 
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { sweepPhotos } from '../../common/storage/photo-retention';
@@ -14,6 +15,8 @@ export interface PunchRefusalInput {
   latitude: number;
   longitude: number;
   distanceMeters?: number | null;
+  /** The nearest covered site, which `distanceMeters` is measured from (058). */
+  siteId?: string | null;
   accuracyMeters?: number | null;
   faceMatchDistance?: number | null;
   capturedAt: Date;
@@ -55,6 +58,7 @@ const REFUSAL_ROW_SELECT = {
   photoRef: true,
   livenessScore: true,
   livenessFailure: true,
+  siteId: true,
 } as const;
 
 export type PunchRefusalRow = {
@@ -74,16 +78,28 @@ export type PunchRefusalRow = {
   /** The capture's mean anti-spoof score (057), and for `liveness_failed` which check failed. */
   livenessScore: Prisma.Decimal | null;
   livenessFailure: string | null;
+  /** The nearest of the employee's sites (058) — what the distance is measured from. */
+  site: { id: string; name: string } | null;
 };
 
 /** The storage key stays on the server; a reader learns only whether a photo exists. */
-function toRow({
-  photoRef,
-  ...row
-}: Omit<PunchRefusalRow, 'hasPhoto'> & {
-  photoRef: string | null;
-}): PunchRefusalRow {
-  return { ...row, hasPhoto: photoRef !== null };
+function toRow(
+  {
+    photoRef,
+    siteId,
+    ...row
+  }: Omit<PunchRefusalRow, 'hasPhoto' | 'site'> & {
+    photoRef: string | null;
+    siteId: string | null;
+  },
+  siteNames: Map<string, string>,
+): PunchRefusalRow {
+  const name = siteId ? siteNames.get(siteId) : undefined;
+  return {
+    ...row,
+    hasPhoto: photoRef !== null,
+    site: siteId && name ? { id: siteId, name } : null,
+  };
 }
 
 @Injectable()
@@ -93,7 +109,20 @@ export class PunchRefusalsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly sites: SitesService,
   ) {}
+
+  /** Rows as a reader sees them, each with its site named (058). */
+  private async toRows(
+    ctx: RlsContext,
+    rows: Parameters<typeof toRow>[0][],
+  ): Promise<PunchRefusalRow[]> {
+    const names = await this.sites.namesFor(
+      ctx,
+      rows.flatMap((row) => (row.siteId ? [row.siteId] : [])),
+    );
+    return rows.map((row) => toRow(row, names));
+  }
 
   /**
    * Writes one refusal.
@@ -126,6 +155,7 @@ export class PunchRefusalsService {
                 ? null
                 : input.livenessScore.toFixed(4),
             livenessFailure: input.livenessFailure ?? null,
+            siteId: input.siteId ?? null,
           },
         }),
       );
@@ -177,7 +207,7 @@ export class PunchRefusalsService {
         select: REFUSAL_ROW_SELECT,
       }),
     );
-    return rows.map(toRow);
+    return this.toRows(ctx, rows);
   }
 
   /**
@@ -216,7 +246,7 @@ export class PunchRefusalsService {
         select: REFUSAL_ROW_SELECT,
       }),
     );
-    return rows.map(toRow);
+    return this.toRows(ctx, rows);
   }
 
   /**

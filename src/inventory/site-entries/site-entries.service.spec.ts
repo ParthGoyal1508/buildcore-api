@@ -3,7 +3,7 @@ import {
   ForbiddenException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { Permission, Prisma } from '@prisma/client';
+import { AccessLevel, Permission, Prisma } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 
@@ -40,6 +40,7 @@ const dto = (over: Partial<CreateSiteEntryDto> = {}): CreateSiteEntryDto => ({
 const build = (
   options: {
     stores?: { id: string; name: string }[];
+    allSites?: { id: string; name: string }[];
     existing?: Record<string, unknown> | null;
     createFails?: Error;
     isActive?: boolean;
@@ -85,6 +86,7 @@ const build = (
     mySites: jest
       .fn()
       .mockResolvedValue(options.stores ?? [{ id: 'site-1', name: 'Site A' }]),
+    allSites: jest.fn().mockResolvedValue(options.allSites ?? []),
   };
   const audit = { record: jest.fn() };
   const service = new SiteEntriesService(
@@ -190,6 +192,34 @@ describe('SiteEntriesService.create — the store comes from the assignment (043
     expect(prisma.tx.purchase.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ siteId: 'site-2' }),
     });
+  });
+});
+
+describe('SiteEntriesService.myStores — Inventory editors record anywhere (2026-11-07)', () => {
+  const every = [
+    { id: 'site-1', name: 'Site A' },
+    { id: 'site-7', name: 'Site G' },
+  ];
+
+  it('gives whoever may add and edit Inventory every store of the company', async () => {
+    const { service } = build({ stores: [], allSites: every });
+    const purchaseManager = callerFor('co-1', {
+      permissions: [Permission.INVENTORY, Permission.INVENTORY_SITE_ENTRY],
+      grants: [
+        { permission: Permission.INVENTORY, level: AccessLevel.read },
+        { permission: Permission.INVENTORY, level: AccessLevel.write },
+      ],
+    });
+    await expect(service.myStores(purchaseManager)).resolves.toEqual(every);
+  });
+
+  it('keeps a viewer of Inventory to their assigned sites', async () => {
+    const { service } = build({ stores: [], allSites: every });
+    const viewer = callerFor('co-1', {
+      permissions: [Permission.INVENTORY, Permission.INVENTORY_SITE_ENTRY],
+      grants: [{ permission: Permission.INVENTORY, level: AccessLevel.read }],
+    });
+    await expect(service.myStores(viewer)).resolves.toEqual([]);
   });
 });
 

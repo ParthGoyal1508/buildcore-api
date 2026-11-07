@@ -40,6 +40,7 @@ import { EquipmentPhotosService } from './equipment-photos.service';
 import { EquipmentRegisterService } from './equipment-register.service';
 import { EquipmentService } from './equipment.service';
 import { contentDispositionFor } from '../../common/storage/file-type';
+import { EditorMayDelete } from '../../common/record-delete/editor-may-delete.decorator';
 
 /**
  * The asset register (006 US2), gated by `MACHINERY`.
@@ -289,6 +290,7 @@ export class EquipmentController {
     return this.photos.setMain(caller, id, photoId, ipAddress);
   }
 
+  @EditorMayDelete()
   @Delete(':id/photos/:photoId')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
@@ -304,6 +306,7 @@ export class EquipmentController {
     await this.photos.remove(caller, id, photoId, ipAddress);
   }
 
+  @EditorMayDelete()
   @Delete(':id/documents/:docId')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Remove a document' })

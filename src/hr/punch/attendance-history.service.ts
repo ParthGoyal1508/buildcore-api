@@ -34,6 +34,9 @@ export interface AttendanceDay {
   dayOfWeek: number;
   inTime: string | null;
   outTime: string | null;
+  /** Where the day's punch-in and last punch-out were made (058); null when not recorded. */
+  punchInSite: { id: string; name: string } | null;
+  punchOutSite: { id: string; name: string } | null;
   otHours: number | null;
   status: AttendanceStatus;
   /**
@@ -287,23 +290,35 @@ export class AttendanceHistoryService {
 
     const holidaySet = new Set(holidays);
     const punchesByDate = groupByCapturedDate(punches, this.timeZone);
+    // 058: one lookup for the month's sites, not one per day.
+    const siteNames = await this.sites.namesFor(
+      caller.rls,
+      punches.flatMap((p) => (p.siteId ? [p.siteId] : [])),
+    );
+    const siteOf = (p?: PunchRecord) => {
+      const name = p?.siteId ? siteNames.get(p.siteId) : undefined;
+      return p?.siteId && name ? { id: p.siteId, name } : null;
+    };
 
     const days = eachDateInRange(firstDate, lastDate).map((date) => {
       const dayPunches = punchesByDate.get(date) ?? [];
-      const firstIn =
-        dayPunches.find((p) => p.type === PunchType.in)?.capturedAt ?? null;
+      const inPunch = dayPunches.find((p) => p.type === PunchType.in);
+      const firstIn = inPunch?.capturedAt ?? null;
       // Last, not first: an employee who punched out for lunch and back in again
       // finished at the later time, and reporting the earlier one would understate
       // the day.
-      const lastOut =
-        [...dayPunches].reverse().find((p) => p.type === PunchType.out)
-          ?.capturedAt ?? null;
+      const outPunch = [...dayPunches]
+        .reverse()
+        .find((p) => p.type === PunchType.out);
+      const lastOut = outPunch?.capturedAt ?? null;
 
       return {
         date,
         dayOfWeek: parseDateOnly(date).getUTCDay(),
         inTime: firstIn?.toISOString() ?? null,
         outTime: lastOut?.toISOString() ?? null,
+        punchInSite: siteOf(inPunch),
+        punchOutSite: siteOf(outPunch),
         // Overtime needs both ends of the day; an open punch-in has no measurable
         // duration yet, so it reports null rather than a misleading zero.
         otHours:

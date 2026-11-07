@@ -8,8 +8,10 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  AccessLevel,
   AuditAction,
   AuditEntityType,
+  Permission,
   Prisma,
   Purchase,
   PurchaseSource,
@@ -19,6 +21,7 @@ import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
+import { holdsAtLevel } from '../../common/access-levels';
 import type { SettingsConfig } from '../../common/configs/config.interface';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
@@ -82,8 +85,17 @@ export class SiteEntriesService {
     this.timeZone = configService.get<SettingsConfig>('settings').timezone;
   }
 
-  /** The stores the caller may record against — empty means none is assigned. */
+  /**
+   * The stores the caller may record against — empty means none is assigned.
+   *
+   * Whoever may add and edit Inventory (the Purchase Manager, Head Office) records at every store
+   * of the company they work in, as they already may on the full purchase form (client,
+   * 2026-11-07). Everyone else — the Site Incharge — only at the sites assigned to them.
+   */
   async myStores(caller: AuthenticatedUser): Promise<SiteOption[]> {
+    if (holdsAtLevel(caller, Permission.INVENTORY, AccessLevel.write)) {
+      return this.supervisorSites.allSites(caller);
+    }
     return this.supervisorSites.mySites(caller);
   }
 

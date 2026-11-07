@@ -3,6 +3,7 @@ import { AccessLevel, Permission } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayUnique,
+  IsBoolean,
   IsArray,
   IsEnum,
   IsIn,
@@ -85,6 +86,16 @@ export class CreateRoleDto {
     message: `homeModule must be one of: ${HOME_MODULES.join(', ')}`,
   })
   homeModule?: HomeModule | null;
+
+  @ApiPropertyOptional({
+    description:
+      '"Works in all companies" (058): holders switch between every active company of the group, ' +
+      'one at a time, with only this role\u2019s modules — none of Super Admin\u2019s powers. Only a ' +
+      'Super Admin may set or change it (403 `ALL_COMPANIES_SUPER_ADMIN_ONLY`).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  allCompanies?: boolean;
 }
 
 /** One area at one level. */

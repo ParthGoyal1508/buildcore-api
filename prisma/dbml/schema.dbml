@@ -111,6 +111,10 @@ this feature only ever reads roles, it doesn\'t expose role management).']
   isDefault Boolean [not null, default: false, note: 'The role a new account is given when the creator names none (029 FR-001). At most
 one role carries it — a partial unique index in the migration, since Prisma cannot
 express "unique where true". Seeded on "General User".']
+  allCompanies Boolean [not null, default: false, note: '"Works in all companies" (058). Holders may switch between every active company of the group,
+working in one at a time with only this role\'s modules. **Not** Super Admin: none of
+`CROSS_COMPANY_ACCESS`\'s group powers come with it. Only a Super Admin may set it, or give a
+user a role that has it.']
   homeModule String [note: 'Where a holder of this role lands after signing in (029 FR-020): a module key from
 `HOME_MODULES` (src/settings/roles/home-modules.ts), never a URL — the frontend owns
 the routes, and a stored path would be a redirect target an editor could aim anywhere.
@@ -2480,6 +2484,9 @@ calibrating the pass threshold against real devices; null before 057.']
   geofenceResult GeofenceResult
   geofenceDistanceMeters Decimal [note: 'Measured metres from the site centre, retained for the same reason as
 `faceMatchDistance`.']
+  siteId String [note: 'The site the punch was matched to (058): the nearest covered site whose fence contains it.
+Null for a mobile employee, for an admin punch entered without a site, and for punches from
+before 058 whose site could not be known for certain. Bare id into `projects.Site`.']
   punchDate DateTime [not null, note: 'On a punch-in, the id of the punch-out that closed it; null while the punch-in
 is still open. This is what makes "at most one open punch-in per employee"
 (FR-008) enforceable as a partial unique index in the database, instead of
@@ -2756,6 +2763,7 @@ Table PunchRefusal {
 than one adjusted by the accuracy allowance.']
   longitude Decimal [not null]
   distanceMeters Decimal
+  siteId String [note: 'The nearest covered site (058), which `distanceMeters` is measured from. Bare id.']
   accuracyMeters Int
   faceMatchDistance Decimal [note: 'The face-match distance, when a comparison happened at all. A number, not a biometric.']
   photoRef String [note: 'The photo of the refused attempt (057), kept for review and deleted by the retention sweep
@@ -2786,7 +2794,9 @@ Table EmployeeLocationAssignment {
   companyId String [not null]
   employeeId String [not null]
   employee Employee [not null]
-  siteId String [note: 'The site whose fence applies. Null **only** when `isMobile` — see the check constraint.']
+  targets EmployeeLocationAssignmentTarget [not null, note: 'Where the employee may punch (058): one row per site or project. Empty **only** when
+`isMobile`, which the service enforces (a check constraint cannot look across rows). Replaces
+the single `siteId` this table had before 058; existing values were moved into targets.']
   isMobile Boolean [not null, default: false, note: 'FR-014\'s exemption, and it lives here rather than on `Employee` on purpose: exempting somebody
 from location validation is a dated, attributable act, not a property of the person. On
 `Employee` it would be a boolean somebody flipped with no record of when or why.
@@ -2811,6 +2821,26 @@ be deployed without a backfill.
 **Append-only.** `assign()` writes a new row and never updates a prior one, so a transfer six
 months ago is still explicable: the row that was in force then is still there, with who decided it
 and when it took effect.'
+}
+
+Table EmployeeLocationAssignmentTarget {
+  id String [pk]
+  companyId String [not null, note: 'RLS discriminator, copied from the assignment.']
+  assignmentId String [not null]
+  assignment EmployeeLocationAssignment [not null]
+  siteId String
+  projectId String
+
+  indexes {
+    (assignmentId, siteId, projectId) [unique]
+  }
+
+  Note: 'One place an assignment covers (058): a site, or a whole project — every **active** site of the
+project at the moment of each punch, so a site added to the project later is covered without
+touching the assignment. Exactly one of `siteId` and `projectId` (check constraint).
+
+Both are bare ids into `projects`, as `Employee.siteId` is: hr never reads projects tables
+(Principle I), so resolution goes through `SitesService.geofencesFor`.'
 }
 
 Table PendingAttendanceCorrection {
@@ -6427,6 +6457,7 @@ Enum Permission {
   PROJECT_LOCK
   BANK_GUARANTEES
   INVENTORY_SITE_ENTRY
+  LABOUR_ATTENDANCE
 }
 
 Enum CompanyStatus {
@@ -7595,6 +7626,8 @@ Ref: HolidaySite.holidayId > Holiday.id [delete: Cascade]
 Ref: PunchRefusal.employeeId > Employee.id [delete: Cascade]
 
 Ref: EmployeeLocationAssignment.employeeId > Employee.id [delete: Cascade]
+
+Ref: EmployeeLocationAssignmentTarget.assignmentId > EmployeeLocationAssignment.id [delete: Cascade]
 
 Ref: PendingAttendanceCorrection.employeeId > Employee.id [delete: Cascade]
 
