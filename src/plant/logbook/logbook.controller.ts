@@ -15,7 +15,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Permission } from '@prisma/client';
+import { MeterType, Permission } from '@prisma/client';
 import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -134,10 +134,15 @@ export class LogbookController {
           numFmt: '#,##0.###',
         },
         {
-          header: 'Run (h / km)',
+          header: 'Run',
           width: 12,
           value: (r) => r.totalHours,
           numFmt: '#,##0.###',
+        },
+        {
+          header: 'Unit',
+          width: 8,
+          value: (r) => (r.meterType === MeterType.km ? 'km' : 'h'),
         },
         {
           header: 'Fuel (litres)',

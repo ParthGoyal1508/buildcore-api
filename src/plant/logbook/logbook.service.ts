@@ -36,6 +36,8 @@ export interface LogbookRow {
   equipmentId: string;
   equipmentCode: string;
   equipmentName: string;
+  /** The machine's meter: readings and the run are in hours or km. */
+  meterType: MeterType;
   date: Date;
   openingReading: number;
   closingReading: number;
@@ -52,7 +54,9 @@ export interface LogbookRow {
 
 /** A created entry with its equipment joined — what `createInTx` returns and `auditCreated` reads. */
 export type CreatedLogbookEntry = Prisma.LogbookEntryGetPayload<{
-  include: { equipment: { select: { code: true; name: true } } };
+  include: {
+    equipment: { select: { code: true; name: true; meterType: true } };
+  };
 }>;
 
 /**
@@ -115,7 +119,11 @@ export class LogbookService {
             orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
             skip: (page - 1) * pageSize,
             take: pageSize,
-            include: { equipment: { select: { code: true, name: true } } },
+            include: {
+              equipment: {
+                select: { code: true, name: true, meterType: true },
+              },
+            },
           }),
           tx.logbookEntry.count({ where }),
         ]);
@@ -135,6 +143,7 @@ export class LogbookService {
         equipmentId: row.equipmentId,
         equipmentCode: row.equipment.code,
         equipmentName: row.equipment.name,
+        meterType: row.equipment.meterType,
         date: row.date,
         openingReading: Number(row.openingReading),
         closingReading: Number(row.closingReading),
@@ -282,7 +291,9 @@ export class LogbookService {
           ? dto.readingGapReason?.trim() ?? null
           : null,
       },
-      include: { equipment: { select: { code: true, name: true } } },
+      include: {
+        equipment: { select: { code: true, name: true, meterType: true } },
+      },
     });
 
     await this.syncEquipmentFromLogbook(tx, caller, dto.equipmentId);
@@ -425,7 +436,9 @@ export class LogbookService {
             totalHours: dto.closingReading - dto.openingReading,
             readingGapReason: gapReason,
           },
-          include: { equipment: { select: { code: true, name: true } } },
+          include: {
+            equipment: { select: { code: true, name: true, meterType: true } },
+          },
         });
         await this.syncEquipmentFromLogbook(tx, caller, existing.equipmentId);
         return { before: existing, updated: row };
@@ -642,7 +655,9 @@ export class LogbookService {
   private async toRow(
     caller: AuthenticatedUser,
     row: Prisma.LogbookEntryGetPayload<{
-      include: { equipment: { select: { code: true; name: true } } };
+      include: {
+        equipment: { select: { code: true; name: true; meterType: true } };
+      };
     }>,
   ): Promise<LogbookRow> {
     const operatorName = row.operatorId
@@ -656,6 +671,7 @@ export class LogbookService {
       equipmentId: row.equipmentId,
       equipmentCode: row.equipment.code,
       equipmentName: row.equipment.name,
+      meterType: row.equipment.meterType,
       date: row.date,
       openingReading: Number(row.openingReading),
       closingReading: Number(row.closingReading),
