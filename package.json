@@ -40,6 +40,7 @@
     "seed:chains": "ts-node prisma/seed-approval-chains.ts",
     "settings-password:rotate": "ts-node prisma/rotate-settings-password.ts",
     "roles:modules": "ts-node prisma/seed-module-roles.ts",
+    "roles:client": "ts-node prisma/setup-client-roles.ts",
     "backfill:approvals": "ts-node prisma/backfill-approval-chains.ts",
     "seed:defaults": "ts-node prisma/seed-company-defaults.ts",
     "seed:billing-demo": "ts-node prisma/seed-billing-demo.ts",

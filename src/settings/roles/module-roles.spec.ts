@@ -13,6 +13,12 @@ describe('moduleRoles (058)', () => {
     ).toBe(false);
   });
 
+  it('offers no export or delete role — neither controls anything (2026-11-07)', () => {
+    const handedOut = new Set(roles.map((role) => role.permission));
+    expect(handedOut.has(Permission.DATA_EXPORT)).toBe(false);
+    expect(handedOut.has(Permission.DATA_DELETE)).toBe(false);
+  });
+
   it('gives an area a View role (read) and an Edit role (read and write)', () => {
     expect(byName.get('Inventory — View')?.levels).toEqual([AccessLevel.read]);
     expect(byName.get('Inventory — Edit')?.levels).toEqual([

@@ -11,8 +11,6 @@ import { AccessLevel, Permission } from '@prisma/client';
  * web treats as level-agnostic, plus delete, which the client's sheet lists as a single "Allowed".
  */
 const SINGLE_ABILITY: ReadonlySet<Permission> = new Set([
-  Permission.DATA_EXPORT,
-  Permission.DATA_DELETE,
   Permission.LABOUR_APPROVE,
   Permission.INVENTORY_APPROVE,
   Permission.RECRUITMENT_APPROVE,
@@ -25,9 +23,15 @@ const SINGLE_ABILITY: ReadonlySet<Permission> = new Set([
   Permission.INVENTORY_SITE_ENTRY,
 ]);
 
-/** Never handed out as a module role: it is Super Admin. */
+/**
+ * Never handed out as a module role. Cross-company access is Super Admin. Export and delete control
+ * nothing (client, 2026-11-07): whoever can view a list may download it, and deleting a record is
+ * Super Admin only (`RecordDeleteInterceptor`).
+ */
 const NEVER: ReadonlySet<Permission> = new Set([
   Permission.CROSS_COMPANY_ACCESS,
+  Permission.DATA_EXPORT,
+  Permission.DATA_DELETE,
 ]);
 
 /** The names the screens use, where the enum's own spelling would read badly. */
